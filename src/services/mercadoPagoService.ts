@@ -10,7 +10,8 @@ export interface CreditPackage {
   id: string;
   name: string;
   credits: number;
-  price: number;
+  priceUSD: number;   // Display price in USD
+  priceBRL: number;   // Payment price in BRL for MercadoPago
   description: string;
 }
 
@@ -19,21 +20,24 @@ export const CREDIT_PACKAGES: Record<string, CreditPackage> = {
     id: 'starter',
     name: 'Starter',
     credits: 5,
-    price: 15.00,
+    priceUSD: 3.99,
+    priceBRL: 23.94,
     description: 'Perfect to get started'
   },
   intermediate: {
     id: 'intermediate',
     name: 'Intermediate',
     credits: 10,
-    price: 28.00,
+    priceUSD: 5.99,
+    priceBRL: 35.94,
     description: 'Great for focused preparation'
   },
   professional: {
     id: 'professional',
     name: 'Professional',
     credits: 15,
-    price: 40.00,
+    priceUSD: 7.99,
+    priceBRL: 47.94,
     description: 'Ideal for regular practice'
   }
 };
@@ -66,7 +70,13 @@ export class MercadoPagoService {
         throw new Error('Invalid package ID');
       }
 
-      console.log('Creating payment preference for:', { packageId, userId, userEmail });
+      console.log('Creating payment preference for:', { 
+        packageId, 
+        userId, 
+        userEmail,
+        priceUSD: `$${pkg.priceUSD}`,
+        priceBRL: `R$ ${pkg.priceBRL}`
+      });
 
       const frontendUrl = process.env.FRONTEND_URL;
       const webhookUrl = process.env.WEBHOOK_BASE_URL;
@@ -74,6 +84,7 @@ export class MercadoPagoService {
       console.log('Payment URLs:', { frontendUrl, webhookUrl });
 
       // Build preference data - only include optional fields if URLs are configured
+      // NOTE: MercadoPago only accepts BRL, so we use priceBRL for the payment
       const preferenceData: any = {
         items: [
           {
@@ -81,7 +92,7 @@ export class MercadoPagoService {
             title: `Voxly - ${pkg.name} Package`,
             description: `${pkg.description} - ${pkg.credits} interview credits`,
             quantity: 1,
-            unit_price: pkg.price,
+            unit_price: pkg.priceBRL,  // Use BRL price for MercadoPago
             currency_id: 'BRL'
           }
         ],
@@ -101,24 +112,31 @@ export class MercadoPagoService {
         }
       };
 
-      // Only add back_urls if frontend URL is properly configured
-      if (frontendUrl && frontendUrl !== 'http://localhost:3000') {
-        preferenceData.back_urls = {
-          success: `${frontendUrl}/payment/success`,
-          failure: `${frontendUrl}/payment/failure`,
-          pending: `${frontendUrl}/payment/pending`
-        };
-        preferenceData.auto_return = 'approved';
-      }
-
       // Only add notification_url if webhook URL is configured
       if (webhookUrl) {
         preferenceData.notification_url = `${webhookUrl}/webhook/mercadopago`;
       }
 
+      // Add back_urls for redirect after payment
+      // Use frontend URL or fallback to localhost for development
+      const redirectUrl = frontendUrl || 'http://localhost:3000';
+      preferenceData.back_urls = {
+        success: `${redirectUrl}/payment/success`,
+        failure: `${redirectUrl}/payment/failure`,
+        pending: `${redirectUrl}/payment/pending`
+      };
+      // Use 'all' to redirect for all payment statuses (approved, pending, rejected)
+      preferenceData.auto_return = 'all';
+
+      console.log('Creating preference with back_urls:', preferenceData.back_urls);
+      console.log('Auto return:', preferenceData.auto_return);
+      console.log('Notification URL:', preferenceData.notification_url);
+
       const response = await this.preference.create({ body: preferenceData });
 
       console.log('Preference created successfully:', response.id);
+      console.log('Init point:', response.init_point);
+      console.log('Sandbox init point:', response.sandbox_init_point);
 
       return {
         preferenceId: response.id,
@@ -223,6 +241,80 @@ export class MercadoPagoService {
     } catch (error: any) {
       console.error('Error adding credits to user:', error);
       throw new Error(`Failed to add credits: ${error.message}`);
+    }
+  }
+
+  /**
+   * Search for payments by preference ID
+   * This is used for polling payment status when redirect doesn't work
+   */
+  async getPaymentByPreferenceId(preferenceId: string): Promise<{
+    found: boolean;
+    status?: string;
+    paymentId?: string;
+    userId?: string;
+    credits?: number;
+  }> {
+    try {
+      console.log(`Searching for payments with preference ID: ${preferenceId}`);
+
+      // Search for payments associated with this preference
+      const searchResult = await this.payment.search({
+        options: {
+          criteria: 'desc',
+          sort: 'date_created'
+        },
+        body: {
+          external_reference: preferenceId
+        }
+      });
+
+      // MercadoPago search API - look for payments
+      // We need to search by preference_id in a different way
+      // Let's get the preference first and check its status
+      const preference = await this.preference.get({ preferenceId });
+      
+      if (!preference) {
+        return { found: false };
+      }
+
+      // Now search payments with the external_reference we set
+      const externalRef = preference.external_reference;
+      
+      if (externalRef) {
+        try {
+          const parsed = JSON.parse(externalRef);
+          // Check if we can find a completed payment for this user
+          const payments = await this.payment.search({
+            options: {
+              criteria: 'desc',
+              sort: 'date_created'
+            }
+          });
+
+          // Look through recent payments for one matching this preference
+          if (payments.results && payments.results.length > 0) {
+            for (const payment of payments.results) {
+              if (payment.external_reference === externalRef && payment.status === 'approved') {
+                return {
+                  found: true,
+                  status: payment.status,
+                  paymentId: String(payment.id),
+                  userId: parsed.userId,
+                  credits: parsed.credits
+                };
+              }
+            }
+          }
+        } catch (e) {
+          console.error('Error parsing external reference:', e);
+        }
+      }
+
+      return { found: false };
+    } catch (error: any) {
+      console.error('Error searching for payment:', error);
+      return { found: false };
     }
   }
 }

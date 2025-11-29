@@ -174,18 +174,36 @@ app.get('/get-feedback-for-interview/:callId', async (req: Request, res: Respons
       });
     }
 
-    // Generate feedback
+    // Extract call status information for feedback analysis
+    const callStatus = {
+      end_call_reason: call.end_call_reason || call.disconnection_reason,
+      disconnection_reason: call.disconnection_reason,
+      call_duration_ms: call.end_timestamp && call.start_timestamp 
+        ? call.end_timestamp - call.start_timestamp 
+        : call.call_duration_ms,
+      call_status: call.call_status
+    };
+
+    feedbackLogger.info('Processing feedback request', { 
+      callId, 
+      callStatus,
+      transcriptLength: Array.isArray(call.transcript) ? call.transcript.length : 'unknown'
+    });
+
+    // Generate feedback with call status for accurate scoring
     const feedback = await feedbackService.generateFeedback(
       call.transcript as any,
       call.metadata?.job_title || 'Unknown Position',
       call.metadata?.job_description || '',
-      call.metadata?.first_name || 'Candidate'
+      call.metadata?.first_name || 'Candidate',
+      callStatus
     );
 
     res.json({
       status: 'success',
       call_id: callId,
-      feedback: feedback
+      feedback: feedback,
+      call_status: callStatus
     });
   } catch (error: any) {
     feedbackLogger.error('Error in /get-feedback-for-interview', { callId: req.params.callId, error: error.message });
@@ -267,6 +285,31 @@ app.get('/webhook/mercadopago', (req: Request, res: Response) => {
     message: 'Mercado Pago webhook endpoint',
     url: `${process.env.WEBHOOK_BASE_URL}/webhook/mercadopago`
   });
+});
+
+/**
+ * Check payment status by preference ID
+ * GET /payment/status/:preferenceId
+ * Used for polling when MercadoPago redirect doesn't work (sandbox mode)
+ */
+app.get('/payment/status/:preferenceId', async (req: Request, res: Response) => {
+  try {
+    const { preferenceId } = req.params;
+    paymentLogger.info('Checking payment status', { preferenceId });
+
+    const result = await mercadoPagoService.getPaymentByPreferenceId(preferenceId);
+
+    res.json({
+      status: 'success',
+      ...result
+    });
+  } catch (error: any) {
+    paymentLogger.error('Error checking payment status', { error: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
 });
 
 // ===== CREDITS MANAGEMENT =====

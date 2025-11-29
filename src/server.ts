@@ -312,6 +312,69 @@ app.get('/payment/status/:preferenceId', async (req: Request, res: Response) => 
   }
 });
 
+/**
+ * Manually verify and process a payment by payment ID
+ * POST /payment/verify/:paymentId
+ * Used for manual recovery when webhook fails
+ */
+app.post('/payment/verify/:paymentId', async (req: Request, res: Response) => {
+  try {
+    const { paymentId } = req.params;
+    paymentLogger.info('Manually verifying payment', { paymentId });
+
+    // Simulate webhook notification
+    const result = await mercadoPagoService.processWebhook({
+      type: 'payment',
+      data: { id: paymentId }
+    });
+
+    res.json({
+      status: 'success',
+      result
+    });
+  } catch (error: any) {
+    paymentLogger.error('Error verifying payment', { error: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Get recent payments for a user (for debugging)
+ * GET /payment/history/:userId
+ */
+app.get('/payment/history/:userId', async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    paymentLogger.info('Getting payment history', { userId });
+
+    const payments = await mercadoPagoService.getRecentPayments();
+
+    // Filter payments for this user
+    const userPayments = payments.filter((p: any) => {
+      try {
+        const ref = JSON.parse(p.external_reference || '{}');
+        return ref.userId === userId;
+      } catch {
+        return false;
+      }
+    });
+
+    res.json({
+      status: 'success',
+      payments: userPayments
+    });
+  } catch (error: any) {
+    paymentLogger.error('Error getting payment history', { error: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: error.message
+    });
+  }
+});
+
 // ===== CREDITS MANAGEMENT =====
 
 import { clerkClient } from '@clerk/clerk-sdk-node';

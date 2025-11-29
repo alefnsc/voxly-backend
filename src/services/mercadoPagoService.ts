@@ -171,6 +171,26 @@ export class MercadoPagoService {
   }
 
   /**
+   * Get recent payments (for debugging)
+   */
+  async getRecentPayments() {
+    try {
+      const result = await this.payment.search({
+        options: {
+          criteria: 'desc',
+          sort: 'date_created',
+          limit: 20
+        }
+      });
+      
+      return result.results || [];
+    } catch (error: any) {
+      console.error('Error getting recent payments:', error);
+      return [];
+    }
+  }
+
+  /**
    * Process webhook notification
    */
   async processWebhook(notification: any) {

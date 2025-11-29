@@ -20,6 +20,14 @@ export interface FeedbackData {
   problem_solving_rating: number; // 1-5
   detailed_feedback: string;
   recommendations: string[];
+  was_interrupted: boolean;
+}
+
+export interface CallStatus {
+  end_call_reason?: string;
+  disconnection_reason?: string;
+  call_duration_ms?: number;
+  call_status?: string;
 }
 
 export class FeedbackService {
@@ -75,36 +83,129 @@ export class FeedbackService {
   }
 
   /**
+   * Check if the interview was interrupted/incomplete
+   */
+  private isInterviewInterrupted(callStatus?: CallStatus, transcriptLength?: number): boolean {
+    if (!callStatus) return false;
+    
+    // Check for clear interruption signals
+    const interruptedReasons = [
+      'user_hangup',
+      'user_disconnected',
+      'agent_hangup',
+      'inactivity',
+      'max_duration_reached',
+      'error',
+      'connection_error',
+      'network_error'
+    ];
+    
+    const reason = (callStatus.end_call_reason || callStatus.disconnection_reason || '').toLowerCase();
+    
+    // If explicitly interrupted
+    if (interruptedReasons.some(r => reason.includes(r))) {
+      return true;
+    }
+    
+    // If call was very short (less than 2 minutes) with few messages
+    const durationMs = callStatus.call_duration_ms || 0;
+    if (durationMs < 120000 && (transcriptLength || 0) < 6) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * Calculate penalty factor for interrupted interviews
+   */
+  private calculateInterruptionPenalty(callStatus?: CallStatus, transcriptLength?: number): number {
+    if (!callStatus) return 1;
+    
+    const durationMs = callStatus.call_duration_ms || 0;
+    const durationMinutes = durationMs / 60000;
+    
+    // Very short interviews (< 2 min) get significant penalty
+    if (durationMinutes < 2) return 0.4;
+    
+    // Short interviews (2-5 min) get moderate penalty
+    if (durationMinutes < 5) return 0.6;
+    
+    // Medium interviews (5-10 min) get small penalty
+    if (durationMinutes < 10) return 0.8;
+    
+    // Also penalize if very few exchanges
+    if ((transcriptLength || 0) < 6) return 0.5;
+    if ((transcriptLength || 0) < 10) return 0.7;
+    
+    return 1;
+  }
+
+  /**
    * Generate comprehensive interview feedback
    */
   async generateFeedback(
     transcript: any, // Accept any format
     jobTitle: string,
     jobDescription: string,
-    candidateName: string
+    candidateName: string,
+    callStatus?: CallStatus
   ): Promise<FeedbackData> {
     try {
       feedbackLogger.info('Generating feedback for interview', {
         jobTitle,
         candidateName,
         transcriptType: typeof transcript,
-        isArray: Array.isArray(transcript)
+        isArray: Array.isArray(transcript),
+        callStatus: callStatus
       });
 
       // Normalize transcript to array format
       const normalizedTranscript = this.normalizeTranscript(transcript);
       
+      // Check if interview was interrupted
+      const wasInterrupted = this.isInterviewInterrupted(callStatus, normalizedTranscript.length);
+      const penaltyFactor = this.calculateInterruptionPenalty(callStatus, normalizedTranscript.length);
+      
+      feedbackLogger.info('Interview analysis', { 
+        wasInterrupted,
+        penaltyFactor,
+        messageCount: normalizedTranscript.length,
+        durationMs: callStatus?.call_duration_ms 
+      });
+      
+      // Handle interrupted/incomplete interviews - provide minimal, honest feedback
+      if (wasInterrupted && normalizedTranscript.length < 4) {
+        feedbackLogger.warn('Interview was interrupted with minimal content', { 
+          jobTitle, 
+          candidateName,
+          messageCount: normalizedTranscript.length 
+        });
+        return {
+          overall_rating: 1,
+          strengths: [],
+          areas_for_improvement: [],
+          technical_skills_rating: 1,
+          communication_skills_rating: 1,
+          problem_solving_rating: 1,
+          detailed_feedback: 'Interview ended early. Unable to provide feedback.',
+          recommendations: [],
+          was_interrupted: true
+        };
+      }
+      
       if (normalizedTranscript.length === 0) {
         feedbackLogger.warn('No transcript content available', { jobTitle, candidateName });
         return {
-          overall_rating: 3,
-          strengths: ['Completed the interview process'],
-          areas_for_improvement: ['More detailed responses would help evaluation'],
-          technical_skills_rating: 3,
-          communication_skills_rating: 3,
-          problem_solving_rating: 3,
-          detailed_feedback: 'The interview was completed but the transcript was not available for detailed analysis. Please try again or contact support if this issue persists.',
-          recommendations: ['Consider retaking the interview for a more accurate assessment']
+          overall_rating: 1,
+          strengths: [],
+          areas_for_improvement: [],
+          technical_skills_rating: 1,
+          communication_skills_rating: 1,
+          problem_solving_rating: 1,
+          detailed_feedback: 'No interview content recorded. Unable to provide feedback.',
+          recommendations: [],
+          was_interrupted: true
         };
       }
 
@@ -117,11 +218,21 @@ export class FeedbackService {
         .map(item => `${item.role.toUpperCase()}: ${item.content}`)
         .join('\n\n');
 
+      // Add context about interview completeness
+      const interviewContext = wasInterrupted 
+        ? `\n\nIMPORTANT: This interview was INTERRUPTED or INCOMPLETE. The candidate ended the session early or there was a disconnection. Factor this into your evaluation - incomplete interviews should receive LOWER scores as we cannot fully assess the candidate's abilities. A short or interrupted interview cannot demonstrate the candidate's full potential.`
+        : '';
+      
+      const durationContext = callStatus?.call_duration_ms 
+        ? `\n\nInterview duration: ${Math.round(callStatus.call_duration_ms / 60000)} minutes`
+        : '';
+
       const analysisPrompt = `You are an expert interview evaluator. Analyze this job interview and provide comprehensive feedback.
 
 JOB TITLE: ${jobTitle}
 JOB DESCRIPTION: ${jobDescription}
 CANDIDATE: ${candidateName}
+NUMBER OF EXCHANGES: ${normalizedTranscript.length}${durationContext}${interviewContext}
 
 INTERVIEW TRANSCRIPT:
 ${formattedTranscript}
@@ -139,11 +250,11 @@ Provide detailed feedback in the following JSON format:
 }
 
 Rate on scale of 1-5:
-1 - Poor
-2 - Below Average
-3 - Average
-4 - Good
-5 - Excellent
+1 - Poor (very short interview, minimal responses, or interview was interrupted)
+2 - Below Average (incomplete answers, interview cut short, limited demonstration of skills)
+3 - Average (adequate responses but room for improvement)
+4 - Good (solid performance with minor areas to improve)
+5 - Excellent (comprehensive, detailed responses demonstrating clear expertise)
 
 Be constructive, specific, and actionable in your feedback.`;
 
@@ -166,15 +277,37 @@ Be constructive, specific, and actionable in your feedback.`;
 
       const feedback = JSON.parse(response.choices[0].message.content || '{}');
 
+      // Apply penalty factor for interrupted/short interviews
+      const applyPenalty = (rating: number): number => {
+        const penalized = Math.round(rating * penaltyFactor);
+        return Math.max(1, Math.min(5, penalized)); // Ensure 1-5 range
+      };
+
+      // If interview was interrupted, ensure ratings reflect this
+      const finalOverallRating = wasInterrupted 
+        ? Math.min(applyPenalty(feedback.overall_rating || 3), 2) // Cap at 2 for interrupted
+        : applyPenalty(feedback.overall_rating || 3);
+
+      // Add interruption note to feedback if applicable
+      let finalDetailedFeedback = feedback.detailed_feedback || 'Feedback generation in progress.';
+      if (wasInterrupted) {
+        finalDetailedFeedback = `**Note: This interview was interrupted or ended early, which limits the accuracy of this assessment.**\n\n${finalDetailedFeedback}\n\nWe recommend completing a full interview session for a more accurate evaluation of your skills and qualifications.`;
+      }
+
       return {
-        overall_rating: feedback.overall_rating || 3,
+        overall_rating: finalOverallRating,
         strengths: feedback.strengths || [],
-        areas_for_improvement: feedback.areas_for_improvement || [],
-        technical_skills_rating: feedback.technical_skills_rating || 3,
-        communication_skills_rating: feedback.communication_skills_rating || 3,
-        problem_solving_rating: feedback.problem_solving_rating || 3,
-        detailed_feedback: feedback.detailed_feedback || 'Feedback generation in progress.',
-        recommendations: feedback.recommendations || []
+        areas_for_improvement: wasInterrupted 
+          ? ['Interview was not completed', ...(feedback.areas_for_improvement || [])]
+          : (feedback.areas_for_improvement || []),
+        technical_skills_rating: applyPenalty(feedback.technical_skills_rating || 3),
+        communication_skills_rating: applyPenalty(feedback.communication_skills_rating || 3),
+        problem_solving_rating: applyPenalty(feedback.problem_solving_rating || 3),
+        detailed_feedback: finalDetailedFeedback,
+        recommendations: wasInterrupted
+          ? ['Complete a full interview session for accurate assessment', ...(feedback.recommendations || [])]
+          : (feedback.recommendations || []),
+        was_interrupted: wasInterrupted
       };
     } catch (error: any) {
       feedbackLogger.error('Error generating feedback', { error: error.message });

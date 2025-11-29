@@ -278,17 +278,6 @@ export class MercadoPagoService {
     try {
       console.log(`Searching for payments with preference ID: ${preferenceId}`);
 
-      // Search for payments associated with this preference
-      const searchResult = await this.payment.search({
-        options: {
-          criteria: 'desc',
-          sort: 'date_created'
-        },
-        body: {
-          external_reference: preferenceId
-        }
-      });
-
       // MercadoPago search API - look for payments
       // We need to search by preference_id in a different way
       // Let's get the preference first and check its status

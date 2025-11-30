@@ -83,6 +83,8 @@ export class CustomLLMWebSocketHandler {
   private isExtremelyIncompatible: boolean = false;
   private metadata: any = null;
   private hasGreeted: boolean = false; // Track if we've sent initial greeting
+  private reminderCount: number = 0; // Track how many reminders we've sent
+  private readonly MAX_REMINDERS = 2; // After this many reminders, end call gracefully
 
   constructor(ws: WebSocket, openai: OpenAI, callId?: string) {
     this.ws = ws;
@@ -435,10 +437,29 @@ INSTRUCTIONS:
       return;
     }
 
+    // Reset reminder count since user is responding
+    this.reminderCount = 0;
+
     wsLogger.info('User message received', { 
       callId: this.callId, 
       content: lastMessage.content.substring(0, 100) 
     });
+
+    // Check if interview time is almost up (2 min warning)
+    if (this.interviewTimer.shouldWarn()) {
+      wsLogger.info('Interview time warning - 2 minutes remaining', { callId: this.callId });
+      const warningMessage = this.interviewTimer.getWarningMessage();
+      await this.sendResponse(warningMessage, false);
+      // Continue processing after warning
+    }
+
+    // Check if interview time has exceeded
+    if (this.interviewTimer.hasExceededTime()) {
+      wsLogger.info('Interview time exceeded - ending call', { callId: this.callId });
+      const timeUpMessage = this.interviewTimer.getTimeUpMessage();
+      await this.sendResponseWithReason(timeUpMessage, true, 'max_duration');
+      return;
+    }
 
     // Add user message to history
     this.conversationHistory.push({
@@ -472,14 +493,46 @@ INSTRUCTIONS:
   }
 
   /**
-   * Handle reminder required event
+   * Handle reminder required event (user silent for extended period)
+   * Retell sends this before potentially ending the call due to silence
    */
   private async handleReminderRequired(request: CustomLLMRequest) {
-    wsLogger.info('Reminder required - user not responding', { callId: this.callId });
-    await this.sendResponse(
-      "I'm sorry, I didn't catch that. Could you please repeat?",
-      false
-    );
+    this.reminderCount++;
+    wsLogger.info('Reminder required - user not responding', { 
+      callId: this.callId, 
+      reminderCount: this.reminderCount,
+      maxReminders: this.MAX_REMINDERS
+    });
+
+    // If we've sent too many reminders, end the call gracefully
+    if (this.reminderCount >= this.MAX_REMINDERS) {
+      wsLogger.info('Max reminders reached - ending call due to silence', { callId: this.callId });
+      const farewellMessage = "I notice you've been quiet for a while. " +
+        "That's completely okay - interviews can be challenging. " +
+        "I'm going to end our session here to save your time. " +
+        "Feel free to start a new interview whenever you're ready. " +
+        "Take care, and good luck with your job search!";
+      
+      await this.sendResponseWithReason(farewellMessage, true, 'silence');
+      return;
+    }
+
+    // First reminder - gentle prompt
+    if (this.reminderCount === 1) {
+      await this.sendResponse(
+        "I'm sorry, I didn't catch that. Could you please repeat your answer? " +
+        "Take your time - there's no rush.",
+        false
+      );
+    } else {
+      // Second reminder - more explicit
+      await this.sendResponse(
+        "I'm still here whenever you're ready. " +
+        "If you need a moment to think, that's perfectly fine. " +
+        "Just let me know when you'd like to continue.",
+        false
+      );
+    }
   }
 
   /**

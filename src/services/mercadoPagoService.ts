@@ -89,6 +89,9 @@ export class MercadoPagoService {
         throw new Error('Server configuration error: FRONTEND_URL is required for payment processing');
       }
 
+      // Check if frontend URL is localhost (MercadoPago doesn't accept localhost for back_urls)
+      const isLocalhost = frontendUrl.includes('localhost') || frontendUrl.includes('127.0.0.1');
+
       // Build preference data - only include optional fields if URLs are configured
       // NOTE: MercadoPago only accepts BRL, so we use priceBRL for the payment
       const preferenceData: any = {
@@ -115,25 +118,31 @@ export class MercadoPagoService {
           user_id: userId,
           package_id: packageId,
           credits: pkg.credits
-        },
-        // Add back_urls for redirect after payment - REQUIRED for auto_return
-        back_urls: {
+        }
+      };
+
+      // Only add back_urls and auto_return if NOT localhost
+      // MercadoPago requires publicly accessible URLs for redirects
+      if (!isLocalhost) {
+        preferenceData.back_urls = {
           success: `${frontendUrl}/payment/success`,
           failure: `${frontendUrl}/payment/failure`,
           pending: `${frontendUrl}/payment/pending`
-        },
+        };
         // Use 'all' to redirect for all payment statuses (approved, pending, rejected)
-        auto_return: 'all'
-      };
+        preferenceData.auto_return = 'all';
+      } else {
+        console.log('⚠️ Localhost detected - skipping back_urls and auto_return (MercadoPago requires public URLs)');
+      }
 
-      // Only add notification_url if webhook URL is configured
-      if (webhookUrl) {
+      // Only add notification_url if webhook URL is configured and not localhost
+      if (webhookUrl && !webhookUrl.includes('localhost') && !webhookUrl.includes('127.0.0.1')) {
         preferenceData.notification_url = `${webhookUrl}/webhook/mercadopago`;
       }
 
-      console.log('Creating preference with back_urls:', preferenceData.back_urls);
-      console.log('Auto return:', preferenceData.auto_return);
-      console.log('Notification URL:', preferenceData.notification_url);
+      console.log('Creating preference with back_urls:', preferenceData.back_urls || 'SKIPPED (localhost)');
+      console.log('Auto return:', preferenceData.auto_return || 'SKIPPED (localhost)');
+      console.log('Notification URL:', preferenceData.notification_url || 'SKIPPED');
 
       const response = await this.preference.create({ body: preferenceData });
 

@@ -652,23 +652,39 @@ app.post('/webhook/clerk',
       
       authLogger.info('New user registration', { userId, userEmail });
 
-      // Grant 1 free credit to new user
+      // Grant 1 free credit to new user (only if not already granted)
       try {
+        // First, check if user already has freeTrialUsed set to true (prevent double grants)
+        const existingUser = await clerkClient.users.getUser(userId);
+        const existingMetadata = existingUser.publicMetadata || {};
+        
+        if (existingMetadata.freeTrialUsed === true) {
+          authLogger.warn('Free trial already used - skipping', { userId });
+          return res.status(200).json({
+            status: 'skipped',
+            message: 'Free trial already granted',
+            userId
+          });
+        }
+        
+        // Grant free credit and mark as used
+        const currentCredits = (existingMetadata.credits as number) || 0;
         await clerkClient.users.updateUser(userId, {
           publicMetadata: {
-            credits: 1,
-            freeTrialUsed: false,
-            registrationDate: new Date().toISOString()
+            ...existingMetadata,
+            credits: currentCredits + 1,
+            freeTrialUsed: true, // Mark as used to prevent duplicate grants
+            registrationDate: existingMetadata.registrationDate || new Date().toISOString()
           }
         });
 
-        authLogger.info('Free trial credit granted', { userId, credits: 1 });
+        authLogger.info('Free trial credit granted', { userId, credits: currentCredits + 1 });
         
         res.status(200).json({
           status: 'success',
           message: 'Free trial credit granted',
           userId,
-          credits: 1
+          credits: currentCredits + 1
         });
       } catch (updateError: any) {
         authLogger.error('Failed to grant free credit', { userId, error: updateError.message });

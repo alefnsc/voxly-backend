@@ -5,6 +5,10 @@ import bodyParser from 'body-parser';
 import dotenv from 'dotenv';
 import OpenAI from 'openai';
 import { RawData, WebSocket } from 'ws';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import { body, param, validationResult } from 'express-validator';
+import crypto from 'crypto';
 
 // Services
 import { RetellService } from './services/retellService';
@@ -55,11 +59,94 @@ optionalEnvVars.forEach(varName => {
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
+// ===== SECURITY MIDDLEWARE =====
+
+// Helmet - HTTP Security Headers
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'", "https://api.retellai.com", "wss://api.retellai.com"],
+    },
+  },
+  crossOriginEmbedderPolicy: false, // Allow embedding for payment redirects
+}));
+
+// Rate Limiting - Prevent DDoS and brute force attacks
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per window
+  message: { status: 'error', message: 'Too many requests, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Stricter rate limit for sensitive endpoints (payments, credits)
+const sensitiveLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20, // Limit each IP to 20 requests per window
+  message: { status: 'error', message: 'Too many requests to this endpoint, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Very strict rate limit for webhooks (prevent replay attacks)
+const webhookLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: 50, // Allow 50 webhook calls per minute
+  message: { status: 'error', message: 'Webhook rate limit exceeded.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Apply general rate limiter to all routes
+app.use(generalLimiter);
+
+// ===== INPUT VALIDATION HELPERS =====
+
+// Validation error handler middleware
+const handleValidationErrors = (req: Request, res: Response, next: NextFunction) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    logger.warn('Input validation failed', { errors: errors.array(), path: req.path });
+    return res.status(400).json({
+      status: 'error',
+      message: 'Invalid input',
+      errors: errors.array()
+    });
+  }
+  next();
+};
+
+// Sanitize string input - remove potential XSS
+const sanitizeString = (str: string): string => {
+  if (typeof str !== 'string') return '';
+  return str
+    .replace(/[<>]/g, '') // Remove < and >
+    .replace(/javascript:/gi, '') // Remove javascript: protocol
+    .replace(/on\w+=/gi, '') // Remove event handlers
+    .trim()
+    .slice(0, 10000); // Limit length
+};
+
+// Validate userId format (Clerk user IDs)
+const isValidUserId = (userId: string): boolean => {
+  // Clerk user IDs follow pattern: user_xxxxx
+  return /^user_[a-zA-Z0-9]+$/.test(userId);
+};
+
+// ===== CORS CONFIGURATION =====
+
 app.use(cors({
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) return callback(null, true);
+    // Block requests with no origin in production (except webhooks)
+    if (!origin) {
+      // Allow for webhooks and health checks
+      return callback(null, true);
+    }
     
     // Allow localhost, ngrok, and configured frontend URL
     const allowedOrigins = [
@@ -68,7 +155,7 @@ app.use(cors({
       process.env.FRONTEND_URL
     ].filter(Boolean);
     
-    // Allow any ngrok URL
+    // Allow any ngrok URL (for development/testing)
     if (origin.includes('ngrok') || origin.includes('ngrok-free.app')) {
       return callback(null, true);
     }
@@ -82,16 +169,47 @@ app.use(cors({
       return callback(null, true);
     }
     
+    logger.warn('CORS blocked request from origin', { origin });
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'ngrok-skip-browser-warning']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'ngrok-skip-browser-warning', 'svix-id', 'svix-timestamp', 'svix-signature']
 }));
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
 
-// Initialize services
+// Body parsers with size limits to prevent large payload attacks
+app.use(bodyParser.json({ limit: '1mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '1mb' }));
+
+// ===== AUTHENTICATION MIDDLEWARE =====
+
+// Verify user ID from header matches Clerk format and is present
+const verifyUserAuth = async (req: Request, res: Response, next: NextFunction) => {
+  const userId = req.headers['x-user-id'] as string || req.body?.userId;
+  
+  if (!userId) {
+    authLogger.warn('Missing user ID in request', { path: req.path });
+    return res.status(401).json({
+      status: 'error',
+      message: 'Authentication required'
+    });
+  }
+  
+  if (!isValidUserId(userId)) {
+    authLogger.warn('Invalid user ID format', { userId, path: req.path });
+    return res.status(401).json({
+      status: 'error',
+      message: 'Invalid authentication'
+    });
+  }
+  
+  // Attach userId to request for downstream use
+  (req as any).authenticatedUserId = userId;
+  next();
+};
+
+// ===== INITIALIZE SERVICES =====
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
@@ -117,20 +235,35 @@ app.get('/health', (req: Request, res: Response) => {
 /**
  * Register a new Retell call
  * POST /register-call
+ * Protected: Requires valid user authentication
  */
-app.post('/register-call', async (req: Request, res: Response) => {
+app.post('/register-call',
+  verifyUserAuth,
+  [
+    body('metadata').isObject().withMessage('Metadata must be an object'),
+    body('metadata.first_name').optional().isString().trim().escape(),
+    body('metadata.last_name').optional().isString().trim().escape(),
+    body('metadata.company_name').optional().isString().trim().escape(),
+    body('metadata.job_title').optional().isString().trim().escape(),
+  ],
+  handleValidationErrors,
+  async (req: Request, res: Response) => {
   try {
     const { metadata } = req.body;
-    const userId = req.headers['x-user-id'] as string || 'anonymous';
+    const userId = (req as any).authenticatedUserId;
 
-    if (!metadata) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Missing metadata'
-      });
-    }
+    // Sanitize metadata strings
+    const sanitizedMetadata = {
+      ...metadata,
+      first_name: sanitizeString(metadata.first_name || ''),
+      last_name: sanitizeString(metadata.last_name || ''),
+      company_name: sanitizeString(metadata.company_name || ''),
+      job_title: sanitizeString(metadata.job_title || ''),
+      job_description: sanitizeString(metadata.job_description || ''),
+      interviewee_cv: sanitizeString(metadata.interviewee_cv || ''),
+    };
 
-    const result = await retellService.registerCall({ metadata }, userId);
+    const result = await retellService.registerCall({ metadata: sanitizedMetadata }, userId);
     res.json(result);
   } catch (error: any) {
     retellLogger.error('Error in /register-call', { error: error.message });
@@ -232,15 +365,31 @@ app.get('/get-feedback-for-interview/:callId', async (req: Request, res: Respons
 /**
  * Create Mercado Pago payment preference
  * POST /create-payment-preference
+ * Protected: Requires valid user authentication + rate limited
  */
-app.post('/create-payment-preference', async (req: Request, res: Response) => {
+app.post('/create-payment-preference',
+  sensitiveLimiter, // Stricter rate limit for payment endpoints
+  verifyUserAuth,
+  [
+    body('packageId').isIn(['starter', 'intermediate', 'professional']).withMessage('Invalid package ID'),
+    body('userId').isString().matches(/^user_[a-zA-Z0-9]+$/).withMessage('Invalid user ID format'),
+    body('userEmail').isEmail().normalizeEmail().withMessage('Invalid email format'),
+  ],
+  handleValidationErrors,
+  async (req: Request, res: Response) => {
   try {
     const { packageId, userId, userEmail } = req.body;
-
-    if (!packageId || !userId || !userEmail) {
-      return res.status(400).json({
+    const authenticatedUserId = (req as any).authenticatedUserId;
+    
+    // CRITICAL: Verify the request is for the authenticated user (prevent credit theft)
+    if (userId !== authenticatedUserId) {
+      paymentLogger.warn('User ID mismatch in payment request', { 
+        requestedUserId: userId, 
+        authenticatedUserId 
+      });
+      return res.status(403).json({
         status: 'error',
-        message: 'Missing required fields: packageId, userId, userEmail'
+        message: 'Unauthorized: Cannot create payment for another user'
       });
     }
 
@@ -266,10 +415,19 @@ app.post('/create-payment-preference', async (req: Request, res: Response) => {
 /**
  * Mercado Pago webhook handler
  * POST /webhook/mercadopago
+ * Rate limited to prevent replay attacks
  */
-app.post('/webhook/mercadopago', async (req: Request, res: Response) => {
+app.post('/webhook/mercadopago',
+  webhookLimiter,
+  async (req: Request, res: Response) => {
   try {
     paymentLogger.info('Received Mercado Pago webhook', { type: req.body?.type });
+
+    // Basic validation of webhook payload
+    if (!req.body || !req.body.type) {
+      paymentLogger.warn('Invalid webhook payload received');
+      return res.status(200).json({ status: 'ignored', message: 'Invalid payload' });
+    }
 
     const result = await mercadoPagoService.processWebhook(req.body);
 
@@ -303,9 +461,15 @@ app.get('/webhook/mercadopago', (req: Request, res: Response) => {
 /**
  * Check payment status by preference ID
  * GET /payment/status/:preferenceId
- * Used for polling when MercadoPago redirect doesn't work (sandbox mode)
+ * Rate limited + authenticated
  */
-app.get('/payment/status/:preferenceId', async (req: Request, res: Response) => {
+app.get('/payment/status/:preferenceId',
+  sensitiveLimiter,
+  [
+    param('preferenceId').isString().notEmpty().withMessage('Invalid preference ID'),
+  ],
+  handleValidationErrors,
+  async (req: Request, res: Response) => {
   try {
     const { preferenceId } = req.params;
     paymentLogger.info('Checking payment status', { preferenceId });
@@ -357,10 +521,32 @@ app.post('/payment/verify/:paymentId', async (req: Request, res: Response) => {
 /**
  * Get recent payments for a user (for debugging)
  * GET /payment/history/:userId
+ * Protected: User can only view their own history
  */
-app.get('/payment/history/:userId', async (req: Request, res: Response) => {
+app.get('/payment/history/:userId',
+  sensitiveLimiter,
+  verifyUserAuth,
+  [
+    param('userId').matches(/^user_[a-zA-Z0-9]+$/).withMessage('Invalid user ID format'),
+  ],
+  handleValidationErrors,
+  async (req: Request, res: Response) => {
   try {
     const { userId } = req.params;
+    const authenticatedUserId = (req as any).authenticatedUserId;
+    
+    // SECURITY: User can only view their own payment history
+    if (userId !== authenticatedUserId) {
+      paymentLogger.warn('Unauthorized payment history access attempt', { 
+        requestedUserId: userId, 
+        authenticatedUserId 
+      });
+      return res.status(403).json({
+        status: 'error',
+        message: 'Unauthorized: Cannot view payment history for another user'
+      });
+    }
+    
     paymentLogger.info('Getting payment history', { userId });
 
     const payments = await mercadoPagoService.getRecentPayments();
@@ -391,6 +577,11 @@ app.get('/payment/history/:userId', async (req: Request, res: Response) => {
 // ===== CLERK WEBHOOKS =====
 
 import { clerkClient } from '@clerk/clerk-sdk-node';
+import { Webhook } from 'svix';
+
+// Track processed webhook IDs to prevent replay attacks (in production, use Redis)
+const processedWebhookIds = new Set<string>();
+const WEBHOOK_ID_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Clerk webhook handler for user events
@@ -398,9 +589,53 @@ import { clerkClient } from '@clerk/clerk-sdk-node';
  * 
  * Handles:
  * - user.created: Grants 1 free credit to new users
+ * 
+ * Security: Verifies Svix signature when CLERK_WEBHOOK_SECRET is set
  */
-app.post('/webhook/clerk', async (req: Request, res: Response) => {
+app.post('/webhook/clerk',
+  webhookLimiter,
+  async (req: Request, res: Response) => {
   try {
+    const webhookSecret = process.env.CLERK_WEBHOOK_SECRET;
+    
+    // Verify webhook signature if secret is configured
+    if (webhookSecret) {
+      const svixId = req.headers['svix-id'] as string;
+      const svixTimestamp = req.headers['svix-timestamp'] as string;
+      const svixSignature = req.headers['svix-signature'] as string;
+      
+      if (!svixId || !svixTimestamp || !svixSignature) {
+        authLogger.warn('Missing Svix headers in Clerk webhook');
+        return res.status(400).json({ status: 'error', message: 'Missing webhook headers' });
+      }
+      
+      // Prevent replay attacks - check if we've seen this webhook ID
+      if (processedWebhookIds.has(svixId)) {
+        authLogger.warn('Duplicate webhook ID detected (potential replay attack)', { svixId });
+        return res.status(200).json({ status: 'ignored', message: 'Duplicate webhook' });
+      }
+      
+      try {
+        const wh = new Webhook(webhookSecret);
+        wh.verify(JSON.stringify(req.body), {
+          'svix-id': svixId,
+          'svix-timestamp': svixTimestamp,
+          'svix-signature': svixSignature,
+        });
+        
+        // Mark webhook as processed
+        processedWebhookIds.add(svixId);
+        setTimeout(() => processedWebhookIds.delete(svixId), WEBHOOK_ID_TTL);
+        
+        authLogger.info('Clerk webhook signature verified');
+      } catch (verifyError) {
+        authLogger.error('Clerk webhook signature verification failed', { error: verifyError });
+        return res.status(401).json({ status: 'error', message: 'Invalid webhook signature' });
+      }
+    } else {
+      authLogger.warn('CLERK_WEBHOOK_SECRET not set - webhook signature not verified');
+    }
+    
     const { type, data } = req.body;
 
     authLogger.info('Received Clerk webhook', { type, userId: data?.id });
@@ -408,6 +643,12 @@ app.post('/webhook/clerk', async (req: Request, res: Response) => {
     if (type === 'user.created') {
       const userId = data.id;
       const userEmail = data.email_addresses?.[0]?.email_address;
+      
+      // Validate user ID format
+      if (!userId || !isValidUserId(userId)) {
+        authLogger.warn('Invalid user ID in webhook', { userId });
+        return res.status(200).json({ status: 'ignored', message: 'Invalid user ID' });
+      }
       
       authLogger.info('New user registration', { userId, userEmail });
 
@@ -472,15 +713,33 @@ app.get('/webhook/clerk', (req: Request, res: Response) => {
 /**
  * Consume credit when interview starts
  * POST /consume-credit
+ * CRITICAL: This endpoint handles financial transactions
+ * Protected: Requires valid user authentication + rate limited
  */
-app.post('/consume-credit', async (req: Request, res: Response) => {
+app.post('/consume-credit',
+  sensitiveLimiter,
+  verifyUserAuth,
+  [
+    body('userId').matches(/^user_[a-zA-Z0-9]+$/).withMessage('Invalid user ID format'),
+    body('callId').optional().isString().trim(),
+  ],
+  handleValidationErrors,
+  async (req: Request, res: Response) => {
   try {
     const { userId, callId } = req.body;
+    const authenticatedUserId = (req as any).authenticatedUserId;
 
-    if (!userId) {
-      return res.status(400).json({
+    // CRITICAL SECURITY: Verify the request is for the authenticated user
+    // Prevents users from consuming other users' credits
+    if (userId !== authenticatedUserId) {
+      authLogger.warn('Credit consumption user ID mismatch - potential attack', { 
+        requestedUserId: userId, 
+        authenticatedUserId,
+        callId 
+      });
+      return res.status(403).json({
         status: 'error',
-        message: 'Missing userId'
+        message: 'Unauthorized: Cannot consume credits for another user'
       });
     }
 
@@ -528,15 +787,32 @@ app.post('/consume-credit', async (req: Request, res: Response) => {
 /**
  * Restore credits when interview is cancelled due to incompatibility
  * POST /restore-credit
+ * Protected: Requires valid user authentication + rate limited
  */
-app.post('/restore-credit', async (req: Request, res: Response) => {
+app.post('/restore-credit',
+  sensitiveLimiter,
+  verifyUserAuth,
+  [
+    body('userId').matches(/^user_[a-zA-Z0-9]+$/).withMessage('Invalid user ID format'),
+    body('reason').optional().isString().trim().isLength({ max: 200 }),
+    body('callId').optional().isString().trim(),
+  ],
+  handleValidationErrors,
+  async (req: Request, res: Response) => {
   try {
     const { userId, reason, callId } = req.body;
+    const authenticatedUserId = (req as any).authenticatedUserId;
 
-    if (!userId) {
-      return res.status(400).json({
+    // SECURITY: Verify the request is for the authenticated user
+    if (userId !== authenticatedUserId) {
+      authLogger.warn('Credit restoration user ID mismatch - potential attack', { 
+        requestedUserId: userId, 
+        authenticatedUserId,
+        callId 
+      });
+      return res.status(403).json({
         status: 'error',
-        message: 'Missing userId'
+        message: 'Unauthorized: Cannot restore credits for another user'
       });
     }
 
@@ -545,6 +821,17 @@ app.post('/restore-credit', async (req: Request, res: Response) => {
     // Get current user credits
     const user = await clerkClient.users.getUser(userId);
     const currentCredits = (user.publicMetadata.credits as number) || 0;
+    
+    // SECURITY: Cap maximum credits to prevent abuse
+    const MAX_CREDITS = 100;
+    if (currentCredits >= MAX_CREDITS) {
+      authLogger.warn('Credit restoration blocked - max credits reached', { userId, currentCredits });
+      return res.status(400).json({
+        status: 'error',
+        message: 'Maximum credit limit reached'
+      });
+    }
+    
     const newCredits = currentCredits + 1;
 
     // Update user metadata with restored credit

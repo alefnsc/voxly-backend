@@ -26,6 +26,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-ws": "^5.0.2",
+    "gh-pages": "^6.3.0",
     "mercadopago": "^2.0.15",
     "openai": "^4.77.3",
     "retell-sdk": "^4.0.0",

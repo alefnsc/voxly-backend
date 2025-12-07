@@ -12,15 +12,16 @@ export const dbLogger = logger.child({ component: 'database' });
 // Environment-based configuration
 const isDevelopment = process.env.NODE_ENV === 'development';
 const isProduction = process.env.NODE_ENV === 'production';
+const enableQueryLogging = process.env.ENABLE_QUERY_LOGGING === 'true';
 
 // Prisma client configuration
 const prismaClientSingleton = () => {
   return new PrismaClient({
-    log: isDevelopment
+    // Only log queries in development with explicit flag
+    log: isDevelopment && enableQueryLogging
       ? [
           { level: 'query', emit: 'event' },
           { level: 'error', emit: 'stdout' },
-          { level: 'info', emit: 'stdout' },
           { level: 'warn', emit: 'stdout' },
         ]
       : [{ level: 'error', emit: 'stdout' }],
@@ -41,13 +42,12 @@ if (isDevelopment) {
   globalThis.prismaGlobal = prisma;
 }
 
-// Log queries in development
-if (isDevelopment) {
+// Log queries in development only with explicit flag
+if (isDevelopment && enableQueryLogging) {
   // @ts-ignore - Prisma event types
   prisma.$on('query', (e: any) => {
     dbLogger.debug('Query executed', {
-      query: e.query,
-      params: e.params,
+      query: e.query.substring(0, 100), // Truncate long queries
       duration: `${e.duration}ms`
     });
   });

@@ -52,14 +52,20 @@ const coloredFormat = winston.format.combine(
 // Create logs directory
 const logsDir = path.join(process.cwd(), 'logs');
 
+// Determine log level based on environment
+const isProduction = process.env.NODE_ENV === 'production';
+const logLevel = process.env.LOG_LEVEL || (isProduction ? 'warn' : 'info');
+
 const logger = winston.createLogger({
-  level: process.env.LOG_LEVEL || 'info',
+  level: logLevel,
   format: logFormat,
   defaultMeta: { service: 'voxly-backend' },
   transports: [
     // Console output with colors
     new winston.transports.Console({
-      format: coloredFormat
+      format: coloredFormat,
+      // In production, only log warn and above to console
+      level: isProduction ? 'warn' : logLevel
     }),
     
     // Error log file
@@ -70,23 +76,10 @@ const logger = winston.createLogger({
       maxFiles: 5
     }),
     
-    // Combined log file
+    // Combined log file - only errors and warnings in production
     new winston.transports.File({
       filename: path.join(logsDir, 'combined.log'),
-      maxsize: 5242880, // 5MB
-      maxFiles: 5
-    }),
-
-    // Database operations log
-    new winston.transports.File({
-      filename: path.join(logsDir, 'database.log'),
-      maxsize: 5242880, // 5MB
-      maxFiles: 3
-    }),
-
-    // API requests log
-    new winston.transports.File({
-      filename: path.join(logsDir, 'api.log'),
+      level: isProduction ? 'warn' : 'info',
       maxsize: 5242880, // 5MB
       maxFiles: 3
     })

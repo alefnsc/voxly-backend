@@ -79,6 +79,11 @@ interface ChatMessage {
   content: string;
 }
 
+// Constants for performance optimization
+const MAX_CONVERSATION_HISTORY = 20; // Limit to prevent memory bloat
+const MAX_RETRIES = 3;
+const BASE_RETRY_DELAY_MS = 500;
+
 export class CustomLLMWebSocketHandler {
   private ws: WebSocket;
   private openai: OpenAI;
@@ -94,6 +99,7 @@ export class CustomLLMWebSocketHandler {
   private hasGreeted: boolean = false; // Track if we've sent initial greeting
   private reminderCount: number = 0; // Track how many reminders we've sent
   private readonly MAX_REMINDERS = 2; // After this many reminders, end call gracefully
+  private isProcessing: boolean = false; // Prevent concurrent processing
 
   constructor(ws: WebSocket, openai: OpenAI, callId?: string) {
     this.ws = ws;
@@ -124,7 +130,7 @@ export class CustomLLMWebSocketHandler {
       }
     };
     
-    wsLogger.info('Sending initial config', { callId: this.callId });
+    wsLogger.debug('Sending initial config', { callId: this.callId });
     this.ws.send(JSON.stringify(configResponse));
   }
 
@@ -140,7 +146,7 @@ export class CustomLLMWebSocketHandler {
         this.callId = request.call_id || request.call?.call_id || '';
       }
 
-      wsLogger.info('Retell message received', {
+      wsLogger.debug('Retell message received', {
         callId: this.callId,
         interactionType: request.interaction_type,
         responseId: request.response_id,
@@ -170,7 +176,7 @@ export class CustomLLMWebSocketHandler {
           break;
         
         case 'update_only':
-          wsLogger.info('Update only - no response needed', { callId: this.callId });
+          wsLogger.debug('Update only - no response needed', { callId: this.callId });
           break;
           
         case 'ping_pong':
@@ -201,7 +207,7 @@ export class CustomLLMWebSocketHandler {
       response_type: 'ping_pong',
       timestamp: Date.now()
     };
-    wsLogger.info('Responding to ping_pong', { callId: this.callId });
+    wsLogger.debug('Responding to ping_pong', { callId: this.callId });
     this.ws.send(JSON.stringify(pongResponse));
   }
 
@@ -329,7 +335,7 @@ Ask one question at a time and adapt based on candidate responses.`;
    * Handle response required event
    */
   private async handleResponseRequired(request: CustomLLMRequest) {
-    wsLogger.info('Response required', { 
+    wsLogger.debug('Response required', { 
       callId: this.callId,
       retellResponseId: request.response_id,
       hasGreeted: this.hasGreeted
@@ -410,9 +416,9 @@ INSTRUCTIONS:
     // Reset reminder count since user is responding
     this.reminderCount = 0;
 
-    wsLogger.info('User message received', { 
+    wsLogger.debug('User message received', { 
       callId: this.callId, 
-      content: lastMessage.content.substring(0, 100) 
+      contentLength: lastMessage.content.length 
     });
 
     // Check if interview time is almost up (2 min warning)
@@ -598,83 +604,137 @@ INSTRUCTIONS:
   }
 
   /**
-   * Generate response using OpenAI streaming
+   * Prune conversation history to prevent memory bloat
+   * Keeps system prompt + last N messages
+   */
+  private pruneConversationHistory() {
+    if (this.conversationHistory.length > MAX_CONVERSATION_HISTORY) {
+      // Keep system prompt (first message) and last N-1 messages
+      const systemMessage = this.conversationHistory[0];
+      const recentMessages = this.conversationHistory.slice(-(MAX_CONVERSATION_HISTORY - 1));
+      this.conversationHistory = [systemMessage, ...recentMessages];
+      wsLogger.debug('Pruned conversation history', { 
+        callId: this.callId, 
+        newLength: this.conversationHistory.length 
+      });
+    }
+  }
+
+  /**
+   * Exponential backoff delay calculator
+   */
+  private getRetryDelay(attempt: number): number {
+    return Math.min(BASE_RETRY_DELAY_MS * Math.pow(2, attempt), 4000);
+  }
+
+  /**
+   * Generate response using OpenAI streaming with exponential backoff
    * OPTIMIZED: Using gpt-4o-mini for faster response times (~2-3x faster than gpt-4o)
    */
   private async generateAndSendResponse() {
-    wsLogger.info('Generating AI response', { 
+    // Prevent concurrent processing
+    if (this.isProcessing) {
+      wsLogger.warn('Already processing response, skipping', { callId: this.callId });
+      return;
+    }
+    this.isProcessing = true;
+
+    wsLogger.debug('Generating AI response', { 
       callId: this.callId
     });
+
+    // Prune history before generating
+    this.pruneConversationHistory();
     
-    try {
-      let fullResponse = '';
-      let chunkCount = 0;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        let fullResponse = '';
+        let chunkCount = 0;
 
-      // Use OpenAI streaming directly
-      const stream = await this.openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: this.conversationHistory.map(m => ({ role: m.role, content: m.content })),
-        temperature: 0.4,
-        max_tokens: 100,
-        presence_penalty: 0.5,
-        frequency_penalty: 0.3,
-        stream: true
-      });
+        // Use OpenAI streaming directly
+        const stream = await this.openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: this.conversationHistory.map(m => ({ role: m.role, content: m.content })),
+          temperature: 0.4,
+          max_tokens: 100,
+          presence_penalty: 0.5,
+          frequency_penalty: 0.3,
+          stream: true
+        });
 
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || '';
-        const isComplete = chunk.choices[0]?.finish_reason !== null;
-        
-        if (content) {
-          fullResponse += content;
-          chunkCount++;
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content || '';
+          const isComplete = chunk.choices[0]?.finish_reason !== null;
           
-          // Send streaming response
-          const response: CustomLLMResponse = {
-            response_type: 'response',
-            response_id: this.responseId,
-            content: content,
-            content_complete: false
-          };
-          this.ws.send(JSON.stringify(response));
+          if (content) {
+            fullResponse += content;
+            chunkCount++;
+            
+            // Send streaming response
+            const response: CustomLLMResponse = {
+              response_type: 'response',
+              response_id: this.responseId,
+              content: content,
+              content_complete: false
+            };
+            this.ws.send(JSON.stringify(response));
+          }
+
+          if (isComplete) {
+            // Send completion
+            const finalResponse: CustomLLMResponse = {
+              response_type: 'response',
+              response_id: this.responseId,
+              content: '',
+              content_complete: true
+            };
+            this.ws.send(JSON.stringify(finalResponse));
+          }
         }
 
-        if (isComplete) {
-          // Send completion
-          const finalResponse: CustomLLMResponse = {
-            response_type: 'response',
-            response_id: this.responseId,
-            content: '',
-            content_complete: true
-          };
-          this.ws.send(JSON.stringify(finalResponse));
+        wsLogger.debug('AI response sent', { 
+          callId: this.callId, 
+          responseId: this.responseId,
+          chunkCount,
+          responseLength: fullResponse.length
+        });
+
+        // Add to conversation history
+        this.conversationHistory.push({
+          role: 'assistant',
+          content: fullResponse
+        });
+
+        this.responseId++;
+        this.isProcessing = false;
+        return; // Success - exit retry loop
+      } catch (error: any) {
+        lastError = error;
+        wsLogger.warn('OpenAI request failed, retrying', { 
+          callId: this.callId, 
+          attempt: attempt + 1,
+          maxRetries: MAX_RETRIES,
+          error: error.message
+        });
+
+        if (attempt < MAX_RETRIES - 1) {
+          await new Promise(resolve => setTimeout(resolve, this.getRetryDelay(attempt)));
         }
       }
-
-      wsLogger.info('AI response sent', { 
-        callId: this.callId, 
-        responseId: this.responseId,
-        chunkCount,
-        responseLength: fullResponse.length
-      });
-
-      // Add to conversation history
-      this.conversationHistory.push({
-        role: 'assistant',
-        content: fullResponse
-      });
-
-      this.responseId++;
-    } catch (error: any) {
-      wsLogger.error('Error generating AI response', { 
-        callId: this.callId, 
-        error: error.message
-      });
-
-      // Send a fallback response to avoid silence
-      const fallbackMessage = "I apologize, I'm having a brief technical issue. Could you please repeat what you just said?";
-      await this.sendResponse(fallbackMessage, false);
     }
+
+    // All retries failed
+    wsLogger.error('Error generating AI response after retries', { 
+      callId: this.callId, 
+      error: lastError?.message
+    });
+
+    // Send a fallback response to avoid silence
+    const fallbackMessage = "I apologize, I'm having a brief technical issue. Could you please repeat what you just said?";
+    await this.sendResponse(fallbackMessage, false);
+    this.isProcessing = false;
   }
 
   /**
@@ -693,10 +753,10 @@ INSTRUCTIONS:
       end_call_after_spoken: endCall
     };
 
-    wsLogger.info('Sending initial agent message', {
+    wsLogger.debug('Sending initial agent message', {
       callId: this.callId,
       responseId: 0,
-      contentPreview: content.substring(0, 100),
+      contentLength: content.length,
       endCall
     });
     
@@ -726,10 +786,10 @@ INSTRUCTIONS:
       no_interruption_allowed: true // Don't allow user to interrupt the ending message
     };
 
-    wsLogger.info('Sending ending message (will end after spoken)', {
+    wsLogger.debug('Sending ending message (will end after spoken)', {
       callId: this.callId,
       responseId: 0,
-      contentPreview: content.substring(0, 100)
+      contentLength: content.length
     });
     
     this.ws.send(JSON.stringify(response));
@@ -755,10 +815,10 @@ INSTRUCTIONS:
       end_call_after_spoken: endCall
     };
 
-    wsLogger.info('Sending response', {
+    wsLogger.debug('Sending response', {
       callId: this.callId,
       responseId: this.responseId,
-      contentPreview: content.substring(0, 100),
+      contentLength: content.length,
       endCall
     });
     

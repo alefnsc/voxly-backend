@@ -1117,10 +1117,9 @@ const handleWebSocketConnection = (ws: WebSocket, callId: string, url: string) =
   ws.on('message', async (data: RawData) => {
     try {
       const messageStr = data.toString();
-      wsLogger.info('WebSocket message received', { 
+      wsLogger.debug('WebSocket message received', { 
         callId, 
-        messageLength: messageStr.length,
-        messagePreview: messageStr.substring(0, 200)
+        messageLength: messageStr.length
       });
       await handler.handleMessage(messageStr);
     } catch (error: any) {
@@ -1185,18 +1184,58 @@ wsApp.listen(PORT, () => {
   logger.info('Services: Retell Custom LLM, Mercado Pago, OpenAI, Clerk');
   logger.info(`Custom LLM WebSocket URL: ${retellService.getCustomLLMWebSocketUrl()}`);
   logger.info(`Webhook URL: ${process.env.WEBHOOK_BASE_URL}/webhook/mercadopago`);
+  logger.info(`Log Level: ${process.env.LOG_LEVEL || 'info'}`);
   logger.info('═'.repeat(60));
 });
 
-// Handle graceful shutdown
-process.on('SIGTERM', () => {
-  logger.warn('SIGTERM signal received: closing WebSocket connections');
+// Graceful shutdown handler
+const gracefulShutdown = async (signal: string) => {
+  logger.warn(`${signal} signal received: starting graceful shutdown`);
+  
+  // Close WebSocket connections first
   const wss = getWss();
+  const closePromises: Promise<void>[] = [];
+  
   wss.clients.forEach((client) => {
-    client.close();
+    closePromises.push(new Promise((resolve) => {
+      client.once('close', () => resolve());
+      client.close(1001, 'Server shutting down');
+    }));
   });
-  logger.info('All connections closed');
+
+  // Wait for connections to close (max 5 seconds)
+  await Promise.race([
+    Promise.all(closePromises),
+    new Promise(resolve => setTimeout(resolve, 5000))
+  ]);
+  
+  logger.info('WebSocket connections closed');
+
+  // Disconnect database
+  try {
+    const { disconnectDatabase } = await import('./services/databaseService');
+    await disconnectDatabase();
+    logger.info('Database disconnected');
+  } catch (err) {
+    logger.error('Error disconnecting database', { error: err });
+  }
+
+  logger.info('Graceful shutdown complete');
   process.exit(0);
+};
+
+// Handle shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception', { error: error.message, stack: error.stack });
+  gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled rejection', { reason, promise });
 });
 
 export default app;

@@ -210,6 +210,119 @@ export async function updatePaymentByMercadoPagoId(
 }
 
 /**
+ * Link MercadoPago payment ID to existing payment record
+ * Finds the most recent pending payment for the user/package and updates it
+ */
+export async function linkMercadoPagoPayment(
+  clerkId: string,
+  packageId: string,
+  mercadoPagoId: string,
+  statusDetail?: string
+) {
+  dbLogger.info('Linking MercadoPago payment to record', { clerkId, packageId, mercadoPagoId });
+
+  // Find user by Clerk ID
+  const user = await prisma.user.findUnique({
+    where: { clerkId },
+    select: { id: true }
+  });
+
+  if (!user) {
+    dbLogger.warn('User not found for payment linking', { clerkId });
+    return null;
+  }
+
+  // Find the most recent pending payment for this user and package
+  const payment = await prisma.payment.findFirst({
+    where: {
+      userId: user.id,
+      packageId,
+      status: 'PENDING'
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  if (!payment) {
+    dbLogger.warn('No pending payment found to link', { clerkId, packageId });
+    return null;
+  }
+
+  // Update the payment with MercadoPago ID and mark as approved
+  const updatedPayment = await prisma.payment.update({
+    where: { id: payment.id },
+    data: {
+      mercadoPagoId,
+      status: 'APPROVED',
+      statusDetail,
+      paidAt: new Date()
+    }
+  });
+
+  dbLogger.info('Payment linked successfully', { 
+    paymentId: payment.id, 
+    mercadoPagoId,
+    packageId 
+  });
+
+  return updatedPayment;
+}
+
+/**
+ * Mark a payment as failed by finding recent pending payment
+ */
+export async function markPaymentFailed(
+  clerkId: string,
+  packageId: string,
+  status: 'REJECTED' | 'CANCELLED',
+  statusDetail?: string
+) {
+  dbLogger.info('Marking payment as failed', { clerkId, packageId, status });
+
+  // Find user by Clerk ID
+  const user = await prisma.user.findUnique({
+    where: { clerkId },
+    select: { id: true }
+  });
+
+  if (!user) {
+    dbLogger.warn('User not found for payment status update', { clerkId });
+    return null;
+  }
+
+  // Find the most recent pending payment for this user and package
+  const payment = await prisma.payment.findFirst({
+    where: {
+      userId: user.id,
+      packageId,
+      status: 'PENDING'
+    },
+    orderBy: { createdAt: 'desc' }
+  });
+
+  if (!payment) {
+    dbLogger.warn('No pending payment found to mark as failed', { clerkId, packageId });
+    return null;
+  }
+
+  // Update the payment status
+  const updatedPayment = await prisma.payment.update({
+    where: { id: payment.id },
+    data: {
+      status,
+      statusDetail
+    }
+  });
+
+  dbLogger.info('Payment marked as failed', { 
+    paymentId: payment.id, 
+    status,
+    packageId 
+  });
+
+  return updatedPayment;
+}
+
+/**
  * Process successful payment (update status and add credits)
  */
 export async function processSuccessfulPayment(

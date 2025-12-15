@@ -277,7 +277,8 @@ export class MercadoPagoService {
 
         paymentLogger.info('Payment verification result', { 
           paymentId, 
-          status: paymentInfo.status 
+          status: paymentInfo.status,
+          external_reference: paymentInfo.external_reference
         });
 
         // Only process approved payments
@@ -286,23 +287,30 @@ export class MercadoPagoService {
           const externalReference = JSON.parse(paymentInfo.external_reference || '{}');
           const userId = externalReference.userId;
           const credits = externalReference.credits;
+          const packageId = externalReference.packageId;
 
           if (userId && credits) {
-            // Update payment in database
+            // Try to update payment in database (non-blocking)
+            // This links the MercadoPago payment ID to our payment record
             try {
               const paymentDb = await getPaymentDbService();
-              await paymentDb.processSuccessfulPayment(
+              await paymentDb.linkMercadoPagoPayment(
+                userId,
+                packageId,
                 String(paymentId),
                 paymentInfo.status_detail
               );
-              paymentLogger.info('Payment processed in database', { paymentId, userId, credits });
+              paymentLogger.info('Payment linked in database', { paymentId, userId, packageId });
             } catch (dbError: any) {
-              paymentLogger.warn('Failed to update payment in database', { 
-                error: dbError.message 
+              // This is non-critical - credits will still be added
+              paymentLogger.warn('Could not link payment in database (non-critical)', { 
+                error: dbError.message,
+                paymentId,
+                userId
               });
             }
 
-            // Add credits to user via Clerk
+            // Add credits to user - this is the critical operation
             await this.addCreditsToUser(userId, credits);
 
             return {
@@ -313,11 +321,17 @@ export class MercadoPagoService {
             };
           }
         } else if (paymentInfo.status === 'rejected' || paymentInfo.status === 'cancelled') {
-          // Update payment status in database
+          // Extract metadata to find payment
+          const externalReference = JSON.parse(paymentInfo.external_reference || '{}');
+          const userId = externalReference.userId;
+          const packageId = externalReference.packageId;
+          
+          // Update payment status in database (non-blocking)
           try {
             const paymentDb = await getPaymentDbService();
-            await paymentDb.processFailedPayment(
-              String(paymentId),
+            await paymentDb.markPaymentFailed(
+              userId,
+              packageId,
               paymentInfo.status === 'rejected' ? 'REJECTED' : 'CANCELLED',
               paymentInfo.status_detail
             );

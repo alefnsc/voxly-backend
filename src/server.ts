@@ -512,8 +512,19 @@ app.post('/webhook/mercadopago',
       action: webhookData?.action,
       dataId: webhookData?.data?.id || webhookData?.id,
       topic: webhookData?.topic,
+      resource: webhookData?.resource,
       source: req.body && Object.keys(req.body).length > 0 ? 'body' : 'query'
     });
+
+    // Handle merchant_order topic - these are informational, just acknowledge
+    // The actual payment processing happens via the 'payment' topic
+    if (webhookData?.topic === 'merchant_order' || webhookData?.resource?.includes('merchant_orders')) {
+      paymentLogger.info('Merchant order notification received - acknowledged', { 
+        topic: webhookData.topic,
+        resource: webhookData.resource
+      });
+      return res.status(200).json({ status: 'acknowledged', message: 'Merchant order notification received' });
+    }
 
     // Handle IPN format (topic + id in query params)
     if (webhookData?.topic && webhookData?.id) {
@@ -522,9 +533,15 @@ app.post('/webhook/mercadopago',
         id: webhookData.id 
       });
       
+      // Only process payment topics
+      if (webhookData.topic !== 'payment') {
+        paymentLogger.info('Ignoring non-payment IPN topic', { topic: webhookData.topic });
+        return res.status(200).json({ status: 'ignored', message: `Topic ${webhookData.topic} not processed` });
+      }
+      
       // Convert IPN format to webhook format for processing
       const ipnData = {
-        type: webhookData.topic === 'payment' ? 'payment' : webhookData.topic,
+        type: 'payment',
         action: 'payment.updated',
         data: { id: webhookData.id }
       };
@@ -535,6 +552,14 @@ app.post('/webhook/mercadopago',
 
     // Handle webhook format (type + data.id in body)
     if (!webhookData || !webhookData.type) {
+      // Check if it's a resource-based notification (older format)
+      if (webhookData?.resource) {
+        paymentLogger.info('Resource-based notification received - acknowledged', { 
+          resource: webhookData.resource 
+        });
+        return res.status(200).json({ status: 'acknowledged', message: 'Resource notification received' });
+      }
+      
       paymentLogger.warn('Invalid webhook payload received', { 
         body: JSON.stringify(req.body),
         query: JSON.stringify(req.query)

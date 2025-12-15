@@ -7,6 +7,7 @@ import { clerkClient } from '@clerk/express';
 import { Webhook } from 'svix';
 import { prisma, dbLogger } from './databaseService';
 import { authLogger } from '../utils/logger';
+import { checkSignupAbuse, recordSignup, SignupInfo } from './signupAbuseService';
 
 // ========================================
 // TYPES
@@ -15,6 +16,7 @@ import { authLogger } from '../utils/logger';
 export interface ClerkUserData {
   id: string;
   email_addresses: Array<{ email_address: string; id: string }>;
+  phone_numbers?: Array<{ phone_number: string; id: string; verification?: { status: string } }>;
   first_name: string | null;
   last_name: string | null;
   image_url: string | null;
@@ -319,8 +321,9 @@ export async function updateUserCredits(
 
 /**
  * Handle user.created webhook event
+ * Now includes abuse prevention for free credits
  */
-export async function handleUserCreated(userData: ClerkUserData) {
+export async function handleUserCreated(userData: ClerkUserData, signupInfo?: SignupInfo) {
   authLogger.info('Processing user.created event', { userId: userData.id });
 
   // Sync user to database
@@ -331,25 +334,68 @@ export async function handleUserCreated(userData: ClerkUserData) {
   
   if (existingCredits === 0 && !userData.public_metadata?.freeTrialUsed) {
     try {
-      // Update Clerk with free credit
-      await clerkClient.users.updateUser(userData.id, {
-        publicMetadata: {
-          ...userData.public_metadata,
-          credits: 1,
-          freeTrialUsed: true,
-          registrationDate: new Date().toISOString()
+      // Check for abuse if signup info is provided
+      let allowFreeCredit = true;
+      let isSuspicious = false;
+      let suspicionReason: string | undefined;
+
+      if (signupInfo && (signupInfo.ipAddress || signupInfo.deviceFingerprint)) {
+        const abuseCheck = await checkSignupAbuse(signupInfo);
+        allowFreeCredit = abuseCheck.allowFreeCredit;
+        isSuspicious = abuseCheck.isSuspicious;
+        suspicionReason = abuseCheck.suspicionReason;
+
+        if (!allowFreeCredit) {
+          authLogger.warn('Free credit blocked due to abuse detection', {
+            userId: userData.id,
+            reason: suspicionReason
+          });
         }
-      });
+      }
 
-      // Update local database
-      await prisma.user.update({
-        where: { clerkId: userData.id },
-        data: { credits: 1 }
-      });
+      // Record signup info (even if we don't have fingerprint yet)
+      await recordSignup(
+        user.id,
+        signupInfo || {},
+        allowFreeCredit,
+        isSuspicious,
+        suspicionReason
+      );
 
-      authLogger.info('Free trial credit granted', { userId: userData.id });
+      if (allowFreeCredit) {
+        // Update Clerk with free credit
+        await clerkClient.users.updateUser(userData.id, {
+          publicMetadata: {
+            ...userData.public_metadata,
+            credits: 1,
+            freeTrialUsed: true,
+            registrationDate: new Date().toISOString()
+          }
+        });
+
+        // Update local database
+        await prisma.user.update({
+          where: { clerkId: userData.id },
+          data: { credits: 1 }
+        });
+
+        authLogger.info('Free trial credit granted', { userId: userData.id });
+      } else {
+        // Mark freeTrialUsed but don't grant credits
+        await clerkClient.users.updateUser(userData.id, {
+          publicMetadata: {
+            ...userData.public_metadata,
+            credits: 0,
+            freeTrialUsed: true, // Mark as used to prevent future attempts
+            freeCreditBlocked: true,
+            registrationDate: new Date().toISOString()
+          }
+        });
+
+        authLogger.info('Free trial blocked (abuse detected)', { userId: userData.id });
+      }
     } catch (error: any) {
-      authLogger.error('Failed to grant free trial credit', { 
+      authLogger.error('Failed to process free trial credit', { 
         userId: userData.id, 
         error: error.message 
       });
@@ -535,9 +581,10 @@ export type SupportedWebhookEvent = typeof SUPPORTED_WEBHOOK_EVENTS[number];
  * Called by frontend on page load, interview start, etc.
  * 
  * @param clerkId - The Clerk user ID from the session
+ * @param signupInfo - Optional IP/fingerprint for abuse detection
  * @returns The user from database (created if not exists)
  */
-export async function validateAndSyncUser(clerkId: string) {
+export async function validateAndSyncUser(clerkId: string, signupInfo?: SignupInfo) {
   authLogger.info('Validating and syncing user', { clerkId });
 
   // Find or create user
@@ -550,26 +597,94 @@ export async function validateAndSyncUser(clerkId: string) {
       const freeTrialUsed = clerkUser.publicMetadata?.freeTrialUsed as boolean;
       
       if (!freeTrialUsed) {
-        // Grant free trial credit
-        await prisma.user.update({
-          where: { clerkId },
-          data: { credits: 1 }
-        });
+        // Check for abuse if signup info is provided
+        let allowFreeCredit = true;
+        let isSuspicious = false;
+        let suspicionReason: string | undefined;
+        let phoneVerificationRequired = false;
+
+        // Check if phone verification is required for free credits
+        const requirePhoneVerification = process.env.REQUIRE_PHONE_FOR_FREE_CREDIT === 'true';
         
-        await clerkClient.users.updateUser(clerkId, {
-          publicMetadata: {
-            ...clerkUser.publicMetadata,
-            credits: 1,
-            freeTrialUsed: true,
-            registrationDate: new Date().toISOString()
+        if (requirePhoneVerification) {
+          // Check if user has a verified phone number
+          const phoneNumbers = clerkUser.phoneNumbers || [];
+          const hasVerifiedPhone = phoneNumbers.some(
+            (phone: any) => phone.verification?.status === 'verified'
+          );
+          
+          if (!hasVerifiedPhone) {
+            allowFreeCredit = false;
+            phoneVerificationRequired = true;
+            authLogger.info('Free credit requires phone verification', { clerkId });
           }
-        });
-        
-        authLogger.info('Free trial credit granted during validation', { clerkId });
-        
-        // Return updated user
-        const updatedUser = await prisma.user.findUnique({ where: { clerkId } });
-        return { user: updatedUser!, source, freeTrialGranted: true };
+        }
+
+        if (allowFreeCredit && signupInfo && (signupInfo.ipAddress || signupInfo.deviceFingerprint)) {
+          const abuseCheck = await checkSignupAbuse(signupInfo);
+          allowFreeCredit = abuseCheck.allowFreeCredit;
+          isSuspicious = abuseCheck.isSuspicious;
+          suspicionReason = abuseCheck.suspicionReason;
+
+          if (!allowFreeCredit) {
+            authLogger.warn('Free credit blocked due to abuse detection', {
+              clerkId,
+              reason: suspicionReason
+            });
+          }
+        }
+
+        // Record signup info
+        await recordSignup(
+          user.id,
+          signupInfo || {},
+          allowFreeCredit,
+          isSuspicious,
+          suspicionReason
+        );
+
+        if (allowFreeCredit) {
+          // Grant free trial credit
+          await prisma.user.update({
+            where: { clerkId },
+            data: { credits: 1 }
+          });
+          
+          await clerkClient.users.updateUser(clerkId, {
+            publicMetadata: {
+              ...clerkUser.publicMetadata,
+              credits: 1,
+              freeTrialUsed: true,
+              registrationDate: new Date().toISOString()
+            }
+          });
+          
+          authLogger.info('Free trial credit granted during validation', { clerkId });
+          
+          // Return updated user
+          const updatedUser = await prisma.user.findUnique({ where: { clerkId } });
+          return { user: updatedUser!, source, freeTrialGranted: true };
+        } else {
+          // Mark freeTrialUsed but don't grant credits
+          await clerkClient.users.updateUser(clerkId, {
+            publicMetadata: {
+              ...clerkUser.publicMetadata,
+              credits: 0,
+              freeTrialUsed: !phoneVerificationRequired, // Don't mark used if waiting for phone
+              freeCreditBlocked: !phoneVerificationRequired,
+              phoneVerificationPending: phoneVerificationRequired,
+              registrationDate: new Date().toISOString()
+            }
+          });
+          
+          if (phoneVerificationRequired) {
+            authLogger.info('Free trial pending phone verification', { clerkId });
+            return { user, source, freeTrialGranted: false, phoneVerificationRequired: true };
+          } else {
+            authLogger.info('Free trial blocked (abuse detected) during validation', { clerkId });
+            return { user, source, freeTrialGranted: false, freeCreditBlocked: true };
+          }
+        }
       }
     } catch (error: any) {
       authLogger.warn('Failed to check/grant free trial during validation', { 

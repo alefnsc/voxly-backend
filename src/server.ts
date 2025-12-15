@@ -944,6 +944,7 @@ app.get('/api/users/me',
  * Called by frontend on interview page load and critical actions.
  * Validates Clerk session and ensures user exists in database.
  * Creates user from Clerk if not found.
+ * Includes abuse detection for free credit grants.
  * 
  * Protected: Requires valid user authentication
  */
@@ -955,15 +956,28 @@ app.post('/api/users/validate',
     
     authLogger.info('User validation requested', { userId });
 
-    // Validate and sync user
-    const { user, source, freeTrialGranted } = await clerkService.validateAndSyncUser(userId);
+    // Capture signup info for abuse detection
+    const signupInfo = {
+      // Get IP from various headers (nginx, cloudflare, ngrok, etc.)
+      ipAddress: (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+                 (req.headers['x-real-ip'] as string) ||
+                 req.socket.remoteAddress,
+      // Device fingerprint from frontend (optional, sent in body)
+      deviceFingerprint: req.body?.deviceFingerprint,
+      userAgent: req.headers['user-agent']
+    };
+
+    // Validate and sync user with abuse detection
+    const { user, source, freeTrialGranted, freeCreditBlocked, phoneVerificationRequired } = await clerkService.validateAndSyncUser(userId, signupInfo);
 
     authLogger.info('User validation completed', { 
       userId, 
       dbUserId: user.id, 
       source,
       credits: user.credits,
-      freeTrialGranted
+      freeTrialGranted,
+      freeCreditBlocked,
+      phoneVerificationRequired
     });
 
     res.json({
@@ -979,7 +993,9 @@ app.post('/api/users/validate',
         credits: user.credits,
         createdAt: user.createdAt
       },
-      freeTrialGranted
+      freeTrialGranted,
+      freeCreditBlocked,
+      phoneVerificationRequired
     });
   } catch (error: any) {
     authLogger.error('User validation failed', { error: error.message });

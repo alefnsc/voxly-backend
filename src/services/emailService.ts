@@ -9,8 +9,14 @@ import logger from '../utils/logger';
 // Create email logger
 const emailLogger = logger.child({ component: 'email' });
 
-// Initialize Resend client
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Initialize Resend client (optional - emails will be logged if not configured)
+let resend: Resend | null = null;
+if (process.env.RESEND_API_KEY) {
+  resend = new Resend(process.env.RESEND_API_KEY);
+  emailLogger.info('Resend email service initialized');
+} else {
+  emailLogger.warn('RESEND_API_KEY not set - emails will be logged but not sent');
+}
 
 // Email configuration
 const EMAIL_FROM = process.env.EMAIL_FROM || 'Voxly <onboarding@resend.dev>';
@@ -201,6 +207,16 @@ export async function sendFeedbackEmail(params: SendFeedbackEmailParams): Promis
     hasAttachments: attachments.length 
   });
 
+  // If Resend is not configured, log and return success (for development)
+  if (!resend) {
+    emailLogger.warn('Resend not configured - email would be sent', { 
+      to: toEmail, 
+      subject: `Interview Feedback - ${jobTitle} at ${companyName}`,
+      interviewId 
+    });
+    return { success: true, messageId: 'mock-no-resend' };
+  }
+
   try {
     const { data, error } = await resend.emails.send({
       from: EMAIL_FROM,
@@ -247,6 +263,15 @@ export async function sendWelcomeEmail(
   userName: string
 ): Promise<EmailResult> {
   emailLogger.info('Sending welcome email', { to: toEmail });
+
+  // If Resend is not configured, log and return success (for development)
+  if (!resend) {
+    emailLogger.warn('Resend not configured - welcome email would be sent', { 
+      to: toEmail, 
+      userName 
+    });
+    return { success: true, messageId: 'mock-no-resend' };
+  }
 
   try {
     const { data, error } = await resend.emails.send({

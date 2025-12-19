@@ -35,26 +35,32 @@ npm install
 Add the following to your `.env` file (or EC2 environment):
 
 ```bash
-# Required multilingual environment variables
+# ========================================
+# RETELL AI - SIMPLIFIED MULTILINGUAL CONFIGURATION
+# ========================================
+# The platform uses just TWO agents:
+# 1. RETELL_AGENT_ID - Main multilingual agent (PT, EN, ES, FR, RU, HI)
+# 2. RETELL_AGENT_ID_ZH - Chinese Mandarin only (zh-CN)
+#
+# Language differentiation happens via Custom LLM prompt injection,
+# not through separate agents per language.
 
-# Retell AI - Language-specific agents
-RETELL_AGENT_ID=agent_default  # Fallback agent
-RETELL_AGENT_ID_PT_BR=agent_xxx_portuguese
-RETELL_AGENT_ID_EN_US=agent_xxx_english_us
-RETELL_AGENT_ID_EN_GB=agent_xxx_english_uk
-RETELL_AGENT_ID_ES_ES=agent_xxx_spanish_es
-RETELL_AGENT_ID_ES_MX=agent_xxx_spanish_mx
-RETELL_AGENT_ID_ES_AR=agent_xxx_spanish_ar
-RETELL_AGENT_ID_FR_FR=agent_xxx_french
-RETELL_AGENT_ID_RU_RU=agent_xxx_russian
-RETELL_AGENT_ID_ZH_CN=agent_xxx_chinese_simplified
-RETELL_AGENT_ID_ZH_TW=agent_xxx_chinese_traditional
-RETELL_AGENT_ID_HI_IN=agent_xxx_hindi
+# Main Multilingual Agent (REQUIRED)
+# Handles: pt-BR, en-US, en-GB, es-ES, es-MX, es-AR, fr-FR, ru-RU, hi-IN
+RETELL_AGENT_ID=agent_e8f326778af49aaa788cbda7d0
+
+# Chinese Mandarin Agent (OPTIONAL - only if Chinese support needed)
+# Handles: zh-CN only (Cantonese/zh-TW is NOT supported)
+RETELL_AGENT_ID_ZH=agent_ab2721588d6050d8705093636a
 
 # Optional: Language-specific voice IDs for better accents
-RETELL_VOICE_ID_PT_BR=voice_xxx
-RETELL_VOICE_ID_ES_ES=voice_xxx
+# RETELL_VOICE_ID_PT_BR=voice_xxx
+# RETELL_VOICE_ID_ES_ES=voice_xxx
 # ... (add for other languages as needed)
+
+# ========================================
+# PAYMENT PROVIDERS
+# ========================================
 
 # PayPal Configuration (Global payments)
 PAYPAL_CLIENT_ID=your_paypal_client_id
@@ -66,16 +72,24 @@ PAYPAL_SANDBOX_CLIENT_SECRET=your_sandbox_secret
 MERCADOPAGO_ACCESS_TOKEN=your_production_token
 MERCADOPAGO_TEST_ACCESS_TOKEN=your_test_token
 
+# ========================================
+# AI SERVICES
+# ========================================
+
 # Anthropic Claude (for performance chat)
 ANTHROPIC_API_KEY=sk-ant-xxx
 ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
 
-# Abuse Prevention (optional tuning)
+# ========================================
+# ABUSE PREVENTION (optional tuning)
+# ========================================
 MAX_ACCOUNTS_PER_IP=2
 MAX_ACCOUNTS_PER_FINGERPRINT=1
 MAX_SIGNUPS_PER_SUBNET_HOUR=3
 
-# Existing variables (keep as-is)
+# ========================================
+# EXISTING VARIABLES (keep as-is)
+# ========================================
 CLERK_SECRET_KEY=xxx
 DATABASE_URL=xxx
 RETELL_API_KEY=xxx

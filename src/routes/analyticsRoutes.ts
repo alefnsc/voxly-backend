@@ -43,7 +43,8 @@ const chatMessageSchema = z.object({
     roleFilter: z.string().max(200).optional(),
     companyFilter: z.string().max(200).optional(),
     interviewIds: z.array(z.string().uuid()).max(10).optional()
-  }).optional()
+  }).optional(),
+  faqContext: z.string().max(20000).optional() // Optional FAQ context from frontend
 });
 
 const abuseCheckSchema = z.object({
@@ -369,7 +370,7 @@ router.get(
 
 /**
  * POST /chat/performance
- * Send a message to the performance analyst
+ * Send a message to the unified support hub (performance + FAQ)
  */
 router.post(
   '/chat/performance',
@@ -378,20 +379,22 @@ router.post(
   async (req: Request, res: Response) => {
     try {
       const clerkId = (req as any).clerkUserId;
-      const { message, sessionId, filters } = req.body;
+      const { message, sessionId, filters, faqContext } = req.body;
 
-      const response = await performanceChatService.getChatCompletion(
+      const result = await performanceChatService.getChatCompletion(
         clerkId,
         message,
         sessionId,
-        filters || {}
+        filters || {},
+        faqContext
       );
 
       res.json({
         status: 'success',
         data: {
-          message: response,
-          sessionId: sessionId
+          message: result.message,
+          sessionId: result.sessionId,
+          category: result.category
         }
       });
     } catch (error: any) {

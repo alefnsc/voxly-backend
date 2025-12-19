@@ -7,7 +7,8 @@
  * 
  * Architecture:
  * - Single multilingual agent (RETELL_AGENT_ID) for: PT, EN, ES, FR, RU, HI
- * - Separate Chinese agent (RETELL_AGENT_ID_ZH) for: ZH-CN, ZH-TW
+ * - Separate Chinese Mandarin agent (RETELL_AGENT_ID_ZH) for: ZH-CN only
+ *   Note: Cantonese (zh-TW) is NOT supported
  * - Language context is passed to Custom LLM WebSocket for prompt injection
  * 
  * Key features:
@@ -52,12 +53,11 @@ const MULTILINGUAL_AGENT_LANGUAGES: SupportedLanguageCode[] = [
 ];
 
 /**
- * Languages that require a separate agent (e.g., Chinese)
- * These use RETELL_AGENT_ID_ZH or similar language-specific agents
+ * Languages that require a separate agent (Chinese Mandarin only)
+ * Cantonese (zh-TW) is NOT supported in current configuration
  */
 const SEPARATE_AGENT_LANGUAGES: SupportedLanguageCode[] = [
   'zh-CN',
-  'zh-TW',
 ];
 
 /**
@@ -78,13 +78,13 @@ export function requiresSeparateAgent(language: SupportedLanguageCode): boolean 
  * Get the appropriate agent ID for a language
  * 
  * Logic:
- * 1. Chinese languages (zh-CN, zh-TW) → RETELL_AGENT_ID_ZH
+ * 1. Chinese Mandarin (zh-CN) → RETELL_AGENT_ID_ZH
  * 2. All other supported languages → RETELL_AGENT_ID (main multilingual agent)
  */
 function getAgentIdForLanguage(language: SupportedLanguageCode): string {
-  // Chinese requires separate agent
+  // Chinese Mandarin requires separate agent
   if (requiresSeparateAgent(language)) {
-    // Try language-specific agent first (zh-CN or zh-TW)
+    // Try language-specific agent first (zh-CN)
     const specificEnvKey = `RETELL_AGENT_ID_${language.replace('-', '_').toUpperCase()}`;
     const specificAgentId = process.env[specificEnvKey];
     if (specificAgentId) return specificAgentId;
@@ -93,7 +93,7 @@ function getAgentIdForLanguage(language: SupportedLanguageCode): string {
     const chineseAgentId = process.env.RETELL_AGENT_ID_ZH;
     if (chineseAgentId) return chineseAgentId;
     
-    wsLogger.warn('No Chinese agent configured, falling back to main agent', { language });
+    wsLogger.warn('No Chinese Mandarin agent configured, falling back to main agent', { language });
   }
   
   // All other languages use the main multilingual agent
@@ -119,8 +119,7 @@ function getVoiceIdForLanguage(language: SupportedLanguageCode): string | undefi
  * Some languages may need more processing time
  */
 const LANGUAGE_RESPONSE_DELAYS: Partial<Record<SupportedLanguageCode, number>> = {
-  'zh-CN': 200,  // Chinese may need more parsing time
-  'zh-TW': 200,
+  'zh-CN': 200,  // Chinese Mandarin may need more parsing time
   'hi-IN': 150,  // Hindi with mixed English
   'ru-RU': 100,  // Cyrillic processing
 };
@@ -308,10 +307,9 @@ export class MultilingualRetellService {
       configuredLanguages.push(...MULTILINGUAL_AGENT_LANGUAGES);
     }
     
-    // Check if Chinese agent is configured
+    // Check if Chinese Mandarin agent is configured
     const chineseAgentId = process.env.RETELL_AGENT_ID_ZH || 
-                           process.env.RETELL_AGENT_ID_ZH_CN || 
-                           process.env.RETELL_AGENT_ID_ZH_TW;
+                           process.env.RETELL_AGENT_ID_ZH_CN;
     if (chineseAgentId) {
       configuredLanguages.push(...SEPARATE_AGENT_LANGUAGES);
     }

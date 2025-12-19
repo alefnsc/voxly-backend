@@ -265,19 +265,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
         closing: "感谢您的回答。我们的模拟面试到此结束。",
       },
     },
-    'zh-TW': {
-      greeting: "您好 {candidateName}！歡迎參加 Voxly 模擬面試。我是您的 AI 面試官，今天我將評估您申請 {companyName} 公司 {jobTitle} 職位的技能。這次面試大約需要15分鐘。讓我們開始吧！",
-      reminders: {
-        silence: "我還在這裡。如果需要思考一下，請不要著急。",
-        timeWarning: "我們還剩大約5分鐘的面試時間。",
-        wrapUp: "我們快要結束了。最後一個問題。",
-      },
-      transitions: {
-        nextQuestion: "好的，我們來談談下一個話題。",
-        followUp: "這很有趣。您能詳細說說",
-        closing: "感謝您的回答。我們的模擬面試到此結束。",
-      },
-    },
+    // Note: zh-TW (Cantonese/Traditional Chinese) is NOT supported
     'hi-IN': {
       greeting: "नमस्ते {candidateName}! Voxly के साथ आपके मॉक इंटरव्यू में आपका स्वागत है। मैं आपका AI इंटरव्यूअर हूं, और आज मैं {companyName} में {jobTitle} पद के लिए आपके कौशल का मूल्यांकन करूंगा। यह इंटरव्यू लगभग 15 मिनट का होगा। चलिए शुरू करते हैं!",
       reminders: {
@@ -402,15 +390,7 @@ export function getFieldPromptForLanguage(
   - 代码质量意识和最佳实践
   - 技术概念的沟通能力
 </evaluation_focus>`,
-      'zh-TW': `
-<field>軟體工程</field>
-<evaluation_focus>
-  - 程式設計能力和語言知識
-  - 系統設計和架構理解
-  - 解決問題的方法和邏輯思維
-  - 程式碼品質意識和最佳實踐
-  - 技術概念的溝通能力
-</evaluation_focus>`,
+      // Note: zh-TW (Cantonese/Traditional Chinese) is NOT supported
       'hi-IN': `
 <field>सॉफ्टवेयर इंजीनियरिंग</field>
 <evaluation_focus>
@@ -503,15 +483,7 @@ export function getFieldPromptForLanguage(
   - 数字营销渠道专业知识
   - 创新思维和创造力
 </evaluation_focus>`,
-      'zh-TW': `
-<field>市場行銷</field>
-<evaluation_focus>
-  - 活動策劃和執行經驗
-  - 數據分析和基於指標的決策
-  - 品牌策略和定位理解
-  - 數位行銷渠道專業知識
-  - 創新思維和創造力
-</evaluation_focus>`,
+      // Note: zh-TW (Cantonese/Traditional Chinese) is NOT supported
       'hi-IN': `
 <field>मार्केटिंग</field>
 <evaluation_focus>
@@ -605,15 +577,7 @@ export function getFieldPromptForLanguage(
   - 文化契合度和软技能
   - 动机和职业目标
 </evaluation_focus>`,
-      'zh-TW': `
-<field>通用專業人員</field>
-<evaluation_focus>
-  - 履歷中的相關經驗和技能
-  - 解決問題的能力
-  - 溝通技巧
-  - 文化契合度和軟技能
-  - 動機和職業目標
-</evaluation_focus>`,
+      // Note: zh-TW (Cantonese/Traditional Chinese) is NOT supported
       'hi-IN': `
 <field>सामान्य पेशेवर</field>
 <evaluation_focus>

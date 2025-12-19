@@ -25,8 +25,7 @@ export type SupportedLanguageCode =
   | 'es-AR'  // Spanish (Argentina)
   | 'fr-FR'  // French (France)
   | 'ru-RU'  // Russian
-  | 'zh-CN'  // Chinese (Simplified)
-  | 'zh-TW'  // Chinese (Traditional)
+  | 'zh-CN'  // Chinese (Simplified/Mandarin only - Cantonese not supported)
   | 'hi-IN'; // Hindi (India)
 
 /**
@@ -120,18 +119,11 @@ export const LANGUAGE_CONFIGS: Record<SupportedLanguageCode, LanguageConfig> = {
     code: 'zh-CN',
     baseCode: 'zh',
     name: '简体中文',
-    englishName: 'Chinese (Simplified)',
+    englishName: 'Chinese (Mandarin)',
     flag: '🇨🇳',
     rtl: false,
   },
-  'zh-TW': {
-    code: 'zh-TW',
-    baseCode: 'zh',
-    name: '繁體中文',
-    englishName: 'Chinese (Traditional)',
-    flag: '🇹🇼',
-    rtl: false,
-  },
+  // Note: zh-TW (Cantonese/Traditional) is NOT supported
   'hi-IN': {
     code: 'hi-IN',
     baseCode: 'hi',
@@ -191,7 +183,8 @@ export const COUNTRY_CONFIGS: Record<string, CountryConfig> = {
   'FR': { code: 'FR', name: 'France', region: 'EUROPE', defaultLanguage: 'fr-FR', currency: 'EUR', paymentProvider: 'paypal' },
   'RU': { code: 'RU', name: 'Russia', region: 'EUROPE', defaultLanguage: 'ru-RU', currency: 'RUB', paymentProvider: 'paypal' },
   'CN': { code: 'CN', name: 'China', region: 'ASIA_PACIFIC', defaultLanguage: 'zh-CN', currency: 'CNY', paymentProvider: 'paypal' },
-  'TW': { code: 'TW', name: 'Taiwan', region: 'ASIA_PACIFIC', defaultLanguage: 'zh-TW', currency: 'TWD', paymentProvider: 'paypal' },
+  // Taiwan uses Mandarin agent since Cantonese is not supported
+  'TW': { code: 'TW', name: 'Taiwan', region: 'ASIA_PACIFIC', defaultLanguage: 'zh-CN', currency: 'TWD', paymentProvider: 'paypal' },
   'IN': { code: 'IN', name: 'India', region: 'ASIA_PACIFIC', defaultLanguage: 'hi-IN', currency: 'INR', paymentProvider: 'paypal' },
 };
 

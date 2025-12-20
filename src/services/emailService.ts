@@ -3,19 +3,36 @@
  * Handles email delivery using Resend SDK
  */
 
-import { Resend } from 'resend';
 import logger from '../utils/logger';
 
 // Create email logger
 const emailLogger = logger.child({ component: 'email' });
 
-// Initialize Resend client (optional - emails will be logged if not configured)
-let resend: Resend | null = null;
-if (process.env.RESEND_API_KEY) {
-  resend = new Resend(process.env.RESEND_API_KEY);
-  emailLogger.info('Resend email service initialized');
-} else {
-  emailLogger.warn('RESEND_API_KEY not set - emails will be logged but not sent');
+// Lazy-load Resend to avoid initialization errors when API key is missing
+let resend: any = null;
+let resendInitialized = false;
+
+function getResendClient(): any {
+  if (resendInitialized) return resend;
+  
+  resendInitialized = true;
+  const apiKey = process.env.RESEND_API_KEY;
+  
+  if (apiKey) {
+    try {
+      // Dynamic import to avoid initialization errors
+      const { Resend } = require('resend');
+      resend = new Resend(apiKey);
+      emailLogger.info('Resend email service initialized');
+    } catch (error: any) {
+      emailLogger.error('Failed to initialize Resend', { error: error.message });
+      resend = null;
+    }
+  } else {
+    emailLogger.warn('RESEND_API_KEY not set - emails will be logged but not sent');
+  }
+  
+  return resend;
 }
 
 // Email configuration
@@ -207,8 +224,11 @@ export async function sendFeedbackEmail(params: SendFeedbackEmailParams): Promis
     hasAttachments: attachments.length 
   });
 
+  // Get Resend client (lazy-loaded)
+  const resendClient = getResendClient();
+  
   // If Resend is not configured, log and return success (for development)
-  if (!resend) {
+  if (!resendClient) {
     emailLogger.warn('Resend not configured - email would be sent', { 
       to: toEmail, 
       subject: `Interview Feedback - ${jobTitle} at ${companyName}`,
@@ -218,7 +238,7 @@ export async function sendFeedbackEmail(params: SendFeedbackEmailParams): Promis
   }
 
   try {
-    const { data, error } = await resend.emails.send({
+    const { data, error } = await resendClient.emails.send({
       from: EMAIL_FROM,
       to: [toEmail],
       subject: `Your Interview Feedback - ${jobTitle} at ${companyName}`,
@@ -264,8 +284,11 @@ export async function sendWelcomeEmail(
 ): Promise<EmailResult> {
   emailLogger.info('Sending welcome email', { to: toEmail });
 
+  // Get Resend client (lazy-loaded)
+  const resendClient = getResendClient();
+  
   // If Resend is not configured, log and return success (for development)
-  if (!resend) {
+  if (!resendClient) {
     emailLogger.warn('Resend not configured - welcome email would be sent', { 
       to: toEmail, 
       userName 
@@ -274,7 +297,7 @@ export async function sendWelcomeEmail(
   }
 
   try {
-    const { data, error } = await resend.emails.send({
+    const { data, error } = await resendClient.emails.send({
       from: EMAIL_FROM,
       to: [toEmail],
       subject: 'Welcome to Vocaid - Your AI Interview Coach!',

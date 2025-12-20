@@ -15,17 +15,24 @@ datasource db {
 // Synced with Clerk - stores additional user data
 // ========================================
 model User {
-  id            String    @id @default(uuid()) @db.Uuid
-  clerkId       String    @unique @map("clerk_id")
-  email         String    @unique
-  firstName     String?   @map("first_name")
-  lastName      String?   @map("last_name")
-  imageUrl      String?   @map("image_url")
-  credits       Int       @default(0)
-  isActive      Boolean   @default(true) @map("is_active")
-  deletedAt     DateTime? @map("deleted_at")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  id                  String    @id @default(uuid()) @db.Uuid
+  clerkId             String    @unique @map("clerk_id")
+  email               String    @unique
+  firstName           String?   @map("first_name")
+  lastName            String?   @map("last_name")
+  imageUrl            String?   @map("image_url")
+  credits             Int       @default(0)
+  isActive            Boolean   @default(true) @map("is_active")
+  deletedAt           DateTime? @map("deleted_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  // Localization & Onboarding Metadata
+  preferredLanguage   String?   @map("preferred_language") @db.VarChar(10)
+  registrationRegion  String?   @map("registration_region") @db.VarChar(10)
+  registrationCountry String?   @map("registration_country") @db.VarChar(2)
+  initialIp           String?   @map("initial_ip") @db.VarChar(45)
+  onboardingComplete  Boolean   @default(false) @map("onboarding_complete")
 
   // Relations
   interviews    Interview[]
@@ -38,6 +45,8 @@ model User {
   @@index([clerkId])
   @@index([email])
   @@index([isActive])
+  @@index([preferredLanguage])
+  @@index([registrationRegion])
   @@map("users")
 }
 
@@ -128,6 +137,11 @@ model Interview {
   // Transcript storage for performance chat
   transcript      String?          @db.Text
   
+  // Advanced Analytics Fields (populated from Retell call_analysis)
+  sentimentScore  Float?           @map("sentiment_score") @db.DoublePrecision // Overall sentiment 0-100
+  wpmAverage      Float?           @map("wpm_average") @db.DoublePrecision // Words per minute average
+  confidenceTimeline Json?         @map("confidence_timeline") @db.JsonB // Array of {timestamp, value, tone, pace}
+  
   // Timestamps
   createdAt       DateTime         @default(now()) @map("created_at")
   updatedAt       DateTime         @updatedAt @map("updated_at")
@@ -136,6 +150,7 @@ model Interview {
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   metrics         InterviewMetric[]
   scoreHistory    InterviewScoreHistory[]
+  transcriptSegments TranscriptSegment[]
 
   @@index([userId])
   @@index([retellCallId])
@@ -169,6 +184,92 @@ model InterviewMetric {
   @@index([interviewId])
   @@index([category])
   @@map("interview_metrics")
+}
+
+// ========================================
+// TRANSCRIPT SEGMENT MODEL
+// Stores timestamped transcript segments for media sync
+// ========================================
+model TranscriptSegment {
+  id            String    @id @default(uuid()) @db.Uuid
+  interviewId   String    @map("interview_id") @db.Uuid
+  
+  // Segment content
+  speaker       String    // 'agent' or 'user'
+  content       String    @db.Text
+  
+  // Time markers for audio/video sync (in seconds)
+  startTime     Float     @map("start_time") @db.DoublePrecision
+  endTime       Float     @map("end_time") @db.DoublePrecision
+  
+  // Segment-level analytics
+  sentimentScore Float?   @map("sentiment_score") @db.DoublePrecision
+  
+  // Ordering
+  segmentIndex  Int       @map("segment_index")
+  
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  // Relations
+  interview     Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+
+  @@index([interviewId])
+  @@index([startTime])
+  @@index([segmentIndex])
+  @@map("transcript_segments")
+}
+
+// ========================================
+// ROLE PERFORMANCE BENCHMARK MODEL
+// Stores aggregated performance metrics per role for comparative analysis
+// ========================================
+model RolePerformanceBenchmark {
+  id                  String    @id @default(uuid()) @db.Uuid
+  
+  // Role identification (normalized job title)
+  roleTitle           String    @unique @map("role_title")
+  
+  // Aggregated metrics
+  globalAverageScore  Float     @map("global_average_score") @db.DoublePrecision
+  totalInterviews     Int       @map("total_interviews")
+  
+  // Score distribution for percentile calculation
+  scoreDistribution   Json      @map("score_distribution") @db.JsonB // {buckets: [{min, max, count}]}
+  
+  // Soft skills averages
+  avgCommunication    Float?    @map("avg_communication") @db.DoublePrecision
+  avgProblemSolving   Float?    @map("avg_problem_solving") @db.DoublePrecision
+  avgTechnicalDepth   Float?    @map("avg_technical_depth") @db.DoublePrecision
+  avgLeadership       Float?    @map("avg_leadership") @db.DoublePrecision
+  avgAdaptability     Float?    @map("avg_adaptability") @db.DoublePrecision
+  
+  // Metadata
+  lastCalculatedAt    DateTime  @map("last_calculated_at") @default(now())
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([roleTitle])
+  @@index([lastCalculatedAt])
+  @@map("role_performance_benchmarks")
+}
+
+// ========================================
+// AI STUDY RECOMMENDATIONS MODEL
+// Stores AI-generated learning recommendations per interview
+// ========================================
+model StudyRecommendation {
+  id            String    @id @default(uuid()) @db.Uuid
+  interviewId   String    @unique @map("interview_id") @db.Uuid
+  
+  // Recommendation data
+  topics        Json      @db.JsonB // [{topic, priority, reason, resources}]
+  weakAreas     Json      @map("weak_areas") @db.JsonB // [{area, score, suggestion}]
+  
+  // Metadata
+  generatedAt   DateTime  @default(now()) @map("generated_at")
+  
+  @@index([interviewId])
+  @@map("study_recommendations")
 }
 
 // ========================================

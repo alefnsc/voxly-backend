@@ -10,6 +10,7 @@ import { z, ZodError } from 'zod';
 import * as userService from '../services/userService';
 import * as interviewService from '../services/interviewService';
 import * as paymentService from '../services/paymentService';
+import * as analyticsService from '../services/analyticsService';
 import { sendFeedbackEmail } from '../services/emailService';
 import { dbLogger } from '../services/databaseService';
 import { apiLogger } from '../utils/logger';
@@ -426,7 +427,7 @@ router.get(
       res.json({
         status: 'success',
         data: {
-          fileName: `voxly-feedback-${interview.companyName}-${interview.jobTitle}.pdf`,
+          fileName: `vocaid-feedback-${interview.companyName}-${interview.jobTitle}.pdf`,
           contentType: 'application/pdf',
           base64: interview.feedbackPdf
         }
@@ -990,6 +991,172 @@ router.post(
       res.status(500).json({
         status: 'error',
         message: 'Failed to send feedback email'
+      });
+    }
+  }
+);
+
+// ==================== Analytics Routes ====================
+
+// Get interview analytics (confidence timeline, sentiment, WPM)
+router.get(
+  '/interviews/:interviewId/analytics',
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { interviewId } = req.params;
+      
+      if (!interviewId) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Interview ID is required'
+        });
+      }
+      
+      const analytics = await analyticsService.getInterviewAnalytics(interviewId);
+      
+      if (!analytics) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Analytics not found for this interview'
+        });
+      }
+      
+      res.json({
+        status: 'success',
+        data: analytics
+      });
+    } catch (error: any) {
+      dbLogger.error('Error fetching interview analytics', { 
+        error: error.message,
+        interviewId: req.params.interviewId 
+      });
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to fetch interview analytics'
+      });
+    }
+  }
+);
+
+// Get role benchmark data
+router.get(
+  '/benchmarks/:roleTitle',
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { roleTitle } = req.params;
+      
+      if (!roleTitle) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Role title is required'
+        });
+      }
+      
+      const benchmark = await analyticsService.getRoleBenchmark(decodeURIComponent(roleTitle));
+      
+      if (!benchmark) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Benchmark data not found for this role'
+        });
+      }
+      
+      res.json({
+        status: 'success',
+        data: benchmark
+      });
+    } catch (error: any) {
+      dbLogger.error('Error fetching role benchmark', { 
+        error: error.message,
+        roleTitle: req.params.roleTitle 
+      });
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to fetch role benchmark'
+      });
+    }
+  }
+);
+
+// Get transcript with timestamps
+router.get(
+  '/interviews/:interviewId/transcript',
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { interviewId } = req.params;
+      
+      if (!interviewId) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Interview ID is required'
+        });
+      }
+      
+      const transcript = await analyticsService.getTranscriptWithTimestamps(interviewId);
+      
+      if (!transcript || transcript.length === 0) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Transcript not found for this interview'
+        });
+      }
+      
+      res.json({
+        status: 'success',
+        data: { segments: transcript }
+      });
+    } catch (error: any) {
+      dbLogger.error('Error fetching transcript', { 
+        error: error.message,
+        interviewId: req.params.interviewId 
+      });
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to fetch transcript'
+      });
+    }
+  }
+);
+
+// Generate AI study recommendations
+router.post(
+  '/interviews/:interviewId/recommendations',
+  requireAuth,
+  async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { interviewId } = req.params;
+      
+      if (!interviewId) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Interview ID is required'
+        });
+      }
+      
+      const recommendations = await analyticsService.generateStudyRecommendations(interviewId);
+      
+      if (!recommendations || recommendations.length === 0) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Could not generate recommendations for this interview'
+        });
+      }
+      
+      res.json({
+        status: 'success',
+        data: { recommendations }
+      });
+    } catch (error: any) {
+      dbLogger.error('Error generating recommendations', { 
+        error: error.message,
+        interviewId: req.params.interviewId 
+      });
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to generate recommendations'
       });
     }
   }

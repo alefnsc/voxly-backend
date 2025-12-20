@@ -767,3 +767,528 @@ export async function getDashboardAnalytics(
     filters
   };
 }
+
+// ========================================
+// ADVANCED ANALYTICS - TYPES
+// ========================================
+
+export interface TimelineDataPoint {
+  timestamp: number;
+  confidence: number;
+  tone: number;
+  pace: number;
+}
+
+export interface SoftSkillsData {
+  communication: number;
+  problemSolving: number;
+  technicalDepth: number;
+  leadership: number;
+  adaptability: number;
+}
+
+export interface BenchmarkData {
+  userScore: number;
+  globalAverage: number;
+  percentile: number;
+  roleTitle: string;
+  totalCandidates: number;
+  breakdown?: {
+    communication: { user: number; average: number };
+    problemSolving: { user: number; average: number };
+    technicalDepth: { user: number; average: number };
+    leadership: { user: number; average: number };
+    adaptability: { user: number; average: number };
+  };
+}
+
+export interface StudyTopic {
+  id: string;
+  topic: string;
+  priority: 'high' | 'medium' | 'low';
+  reason: string;
+  resources?: string[];
+  estimatedTime?: string;
+}
+
+export interface WeakArea {
+  area: string;
+  score: number;
+  suggestion: string;
+}
+
+export interface TranscriptSegmentData {
+  id: string;
+  speaker: 'agent' | 'user';
+  content: string;
+  startTime: number;
+  endTime: number;
+  sentimentScore?: number;
+}
+
+// ========================================
+// RETELL CALL ANALYSIS PARSER
+// ========================================
+
+/**
+ * Parse Retell call_analysis object to extract sentiment and pace data
+ */
+export function parseRetellCallAnalysis(callAnalysis: any): {
+  sentimentScore: number;
+  wpmAverage: number;
+  confidenceTimeline: TimelineDataPoint[];
+  softSkills: SoftSkillsData;
+} {
+  dbLogger.info('Parsing Retell call analysis', { hasAnalysis: !!callAnalysis });
+  
+  const defaultResult = {
+    sentimentScore: 70,
+    wpmAverage: 120,
+    confidenceTimeline: [],
+    softSkills: {
+      communication: 70,
+      problemSolving: 70,
+      technicalDepth: 70,
+      leadership: 60,
+      adaptability: 70
+    }
+  };
+  
+  if (!callAnalysis) return defaultResult;
+  
+  try {
+    const sentimentScore = callAnalysis.user_sentiment 
+      ? mapSentimentToScore(callAnalysis.user_sentiment) 
+      : 70;
+    const wpmAverage = callAnalysis.words_per_minute || 120;
+    const confidenceTimeline = buildConfidenceTimeline(callAnalysis);
+    const softSkills = extractSoftSkills(callAnalysis);
+    
+    return { sentimentScore, wpmAverage, confidenceTimeline, softSkills };
+  } catch (error) {
+    dbLogger.error('Failed to parse call analysis', { error });
+    return defaultResult;
+  }
+}
+
+function mapSentimentToScore(sentiment: string): number {
+  const sentimentMap: Record<string, number> = {
+    'very_positive': 95, 'positive': 80, 'neutral': 60, 'negative': 35, 'very_negative': 15
+  };
+  return sentimentMap[sentiment.toLowerCase()] || 60;
+}
+
+function buildConfidenceTimeline(callAnalysis: any): TimelineDataPoint[] {
+  const timeline: TimelineDataPoint[] = [];
+  
+  if (callAnalysis.transcript_with_tool_calls) {
+    const segments = callAnalysis.transcript_with_tool_calls;
+    let lastTimestamp = 0;
+    
+    for (const segment of segments) {
+      if (segment.role === 'user' && segment.words) {
+        const segmentWpm = segment.words.length > 0 
+          ? calculateSegmentWpm(segment.words) : 120;
+        const timestamp = segment.words[0]?.start || lastTimestamp;
+        
+        timeline.push({
+          timestamp,
+          confidence: estimateConfidenceFromPace(segmentWpm),
+          tone: mapSentimentToScore(segment.sentiment || 'neutral'),
+          pace: normalizeWpm(segmentWpm)
+        });
+        
+        lastTimestamp = timestamp + (segment.words.length / (segmentWpm / 60));
+      }
+    }
+  }
+  
+  if (timeline.length === 0 && callAnalysis.call_duration_ms) {
+    const duration = callAnalysis.call_duration_ms / 1000;
+    const numPoints = Math.min(20, Math.floor(duration / 30));
+    for (let i = 0; i < numPoints; i++) {
+      timeline.push({
+        timestamp: (i / numPoints) * duration,
+        confidence: 60 + Math.random() * 30,
+        tone: 50 + Math.random() * 40,
+        pace: 40 + Math.random() * 40
+      });
+    }
+  }
+  
+  return timeline;
+}
+
+function calculateSegmentWpm(words: any[]): number {
+  if (words.length < 2) return 120;
+  const startTime = words[0].start;
+  const endTime = words[words.length - 1].end;
+  const durationMinutes = (endTime - startTime) / 60;
+  return durationMinutes > 0 ? words.length / durationMinutes : 120;
+}
+
+function estimateConfidenceFromPace(wpm: number): number {
+  const optimal = 140;
+  const deviation = Math.abs(wpm - optimal);
+  return Math.max(40, Math.min(95, 90 - deviation * 0.3));
+}
+
+function normalizeWpm(wpm: number): number {
+  return Math.max(0, Math.min(100, (wpm - 80) / 1.2));
+}
+
+function extractSoftSkills(callAnalysis: any): SoftSkillsData {
+  const defaults: SoftSkillsData = {
+    communication: 70, problemSolving: 70, technicalDepth: 70, leadership: 60, adaptability: 70
+  };
+  if (callAnalysis.custom_analysis?.soft_skills) {
+    return { ...defaults, ...callAnalysis.custom_analysis.soft_skills };
+  }
+  return defaults;
+}
+
+// ========================================
+// TRANSCRIPT SEGMENTATION
+// ========================================
+
+export async function createTranscriptSegments(
+  interviewId: string,
+  transcriptData: any
+): Promise<TranscriptSegmentData[]> {
+  dbLogger.info('Creating transcript segments', { interviewId });
+  
+  const segments: TranscriptSegmentData[] = [];
+  
+  if (!transcriptData?.transcript_with_tool_calls) {
+    if (typeof transcriptData === 'string') {
+      return parseTextTranscript(interviewId, transcriptData);
+    }
+    return segments;
+  }
+  
+  const rawSegments = transcriptData.transcript_with_tool_calls;
+  let segmentIndex = 0;
+  
+  for (const seg of rawSegments) {
+    if (seg.role !== 'tool_calls') {
+      const startTime = seg.words?.[0]?.start || segmentIndex * 30;
+      const endTime = seg.words?.[seg.words?.length - 1]?.end || startTime + 30;
+      
+      const segment: TranscriptSegmentData = {
+        id: `${interviewId}-${segmentIndex}`,
+        speaker: seg.role === 'agent' ? 'agent' : 'user',
+        content: seg.content || '',
+        startTime,
+        endTime,
+        sentimentScore: seg.sentiment ? mapSentimentToScore(seg.sentiment) : undefined
+      };
+      
+      segments.push(segment);
+      
+      await prisma.transcriptSegment.create({
+        data: {
+          interviewId,
+          speaker: segment.speaker,
+          content: segment.content,
+          startTime: segment.startTime,
+          endTime: segment.endTime,
+          sentimentScore: segment.sentimentScore,
+          segmentIndex
+        }
+      });
+      
+      segmentIndex++;
+    }
+  }
+  
+  return segments;
+}
+
+function parseTextTranscript(interviewId: string, text: string): TranscriptSegmentData[] {
+  const segments: TranscriptSegmentData[] = [];
+  const lines = text.split('\n').filter(l => l.trim());
+  let currentTime = 0;
+  const avgSegmentDuration = 15;
+  
+  lines.forEach((line, index) => {
+    const isAgent = line.toLowerCase().includes('agent:') || line.toLowerCase().includes('interviewer:');
+    const content = line.replace(/^(agent:|interviewer:|user:|candidate:)/i, '').trim();
+    
+    if (content) {
+      segments.push({
+        id: `${interviewId}-${index}`,
+        speaker: isAgent ? 'agent' : 'user',
+        content,
+        startTime: currentTime,
+        endTime: currentTime + avgSegmentDuration
+      });
+      currentTime += avgSegmentDuration;
+    }
+  });
+  
+  return segments;
+}
+
+export async function getTranscriptSegments(interviewId: string): Promise<TranscriptSegmentData[]> {
+  const segments = await prisma.transcriptSegment.findMany({
+    where: { interviewId },
+    orderBy: { segmentIndex: 'asc' }
+  });
+  
+  return segments.map(seg => ({
+    id: seg.id,
+    speaker: seg.speaker as 'agent' | 'user',
+    content: seg.content,
+    startTime: seg.startTime,
+    endTime: seg.endTime,
+    sentimentScore: seg.sentimentScore || undefined
+  }));
+}
+
+// ========================================
+// BENCHMARKING SERVICE
+// ========================================
+
+function normalizeRoleTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/\b(senior|junior|lead|principal|staff)\b/gi, '')
+    .replace(/\b(engineer|developer)\b/gi, 'engineer')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function calculatePercentileFromDistribution(
+  score: number, 
+  distribution: { buckets: { min: number; max: number; count: number }[] }
+): number {
+  if (!distribution?.buckets || distribution.buckets.length === 0) {
+    return Math.min(99, Math.max(1, score));
+  }
+  
+  let belowCount = 0;
+  let totalCount = 0;
+  
+  for (const bucket of distribution.buckets) {
+    totalCount += bucket.count;
+    if (bucket.max < score) {
+      belowCount += bucket.count;
+    } else if (bucket.min <= score && bucket.max >= score) {
+      const bucketRatio = (score - bucket.min) / (bucket.max - bucket.min);
+      belowCount += bucket.count * bucketRatio;
+    }
+  }
+  
+  return totalCount > 0 ? (belowCount / totalCount) * 100 : 50;
+}
+
+export async function getBenchmarkData(
+  interviewId: string,
+  roleTitle: string,
+  userScore: number
+): Promise<BenchmarkData | null> {
+  dbLogger.info('Fetching benchmark data', { interviewId, roleTitle });
+  
+  try {
+    const normalizedRole = normalizeRoleTitle(roleTitle);
+    
+    const benchmark = await prisma.rolePerformanceBenchmark.findUnique({
+      where: { roleTitle: normalizedRole }
+    });
+    
+    if (!benchmark) return null;
+    
+    const percentile = calculatePercentileFromDistribution(
+      userScore, 
+      benchmark.scoreDistribution as any
+    );
+    
+    return {
+      userScore,
+      globalAverage: benchmark.globalAverageScore,
+      percentile,
+      roleTitle: benchmark.roleTitle,
+      totalCandidates: benchmark.totalInterviews,
+      breakdown: benchmark.avgCommunication ? {
+        communication: { user: userScore * 0.25, average: benchmark.avgCommunication },
+        problemSolving: { user: userScore * 0.25, average: benchmark.avgProblemSolving || 70 },
+        technicalDepth: { user: userScore * 0.25, average: benchmark.avgTechnicalDepth || 70 },
+        leadership: { user: userScore * 0.15, average: benchmark.avgLeadership || 60 },
+        adaptability: { user: userScore * 0.1, average: benchmark.avgAdaptability || 70 }
+      } : undefined
+    };
+  } catch (error) {
+    dbLogger.error('Failed to get benchmark data', { error });
+    return null;
+  }
+}
+
+function calculateScoreDistribution(scores: number[]): { buckets: { min: number; max: number; count: number }[] } {
+  const buckets = [
+    { min: 0, max: 20, count: 0 },
+    { min: 20, max: 40, count: 0 },
+    { min: 40, max: 60, count: 0 },
+    { min: 60, max: 80, count: 0 },
+    { min: 80, max: 100, count: 0 }
+  ];
+  
+  for (const score of scores) {
+    for (const bucket of buckets) {
+      if (score >= bucket.min && score < bucket.max) {
+        bucket.count++;
+        break;
+      }
+    }
+  }
+  
+  return { buckets };
+}
+
+export async function recalculateRoleBenchmarks(): Promise<void> {
+  dbLogger.info('Starting role benchmark recalculation');
+  
+  const roleStats = await prisma.interviewScoreHistory.groupBy({
+    by: ['role'],
+    _count: { role: true },
+    _avg: { overallScore: true, communicationScore: true, confidenceScore: true },
+    where: { overallScore: { not: null } }
+  });
+  
+  for (const stat of roleStats) {
+    const normalizedRole = normalizeRoleTitle(stat.role);
+    
+    const scores = await prisma.interviewScoreHistory.findMany({
+      where: { role: stat.role },
+      select: { overallScore: true },
+      orderBy: { overallScore: 'asc' }
+    });
+    
+    const distribution = calculateScoreDistribution(scores.map(s => s.overallScore));
+    
+    await prisma.rolePerformanceBenchmark.upsert({
+      where: { roleTitle: normalizedRole },
+      create: {
+        roleTitle: normalizedRole,
+        globalAverageScore: stat._avg.overallScore || 70,
+        totalInterviews: stat._count.role,
+        scoreDistribution: distribution,
+        avgCommunication: stat._avg.communicationScore,
+        avgAdaptability: 70,
+        avgProblemSolving: 70,
+        avgTechnicalDepth: 70,
+        avgLeadership: 60,
+        lastCalculatedAt: new Date()
+      },
+      update: {
+        globalAverageScore: stat._avg.overallScore || 70,
+        totalInterviews: stat._count.role,
+        scoreDistribution: distribution,
+        avgCommunication: stat._avg.communicationScore,
+        lastCalculatedAt: new Date()
+      }
+    });
+  }
+  
+  dbLogger.info('Role benchmark recalculation complete', { rolesProcessed: roleStats.length });
+}
+
+// ========================================
+// AI RECOMMENDATION ENGINE
+// ========================================
+
+export async function generateStudyRecommendations(
+  interviewId: string,
+  transcript: string,
+  callAnalysis: any,
+  feedback: any
+): Promise<{ topics: StudyTopic[]; weakAreas: WeakArea[] }> {
+  dbLogger.info('Generating study recommendations', { interviewId });
+  
+  const defaultResult = { topics: [], weakAreas: [] };
+  
+  if (!process.env.ANTHROPIC_API_KEY) {
+    dbLogger.warn('ANTHROPIC_API_KEY not set, skipping recommendations');
+    return defaultResult;
+  }
+  
+  try {
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    
+    const prompt = `You are an expert career coach analyzing a mock interview. Based on the interview data below, generate personalized study recommendations.
+
+## Feedback Summary
+- Overall Score: ${feedback?.overallScore || 'N/A'}
+- Strengths: ${feedback?.strengths?.join(', ') || 'N/A'}
+- Areas for Improvement: ${feedback?.improvements?.join(', ') || 'N/A'}
+- Communication Score: ${feedback?.communicationScore || 'N/A'}
+- Technical Score: ${feedback?.technicalScore || 'N/A'}
+- Confidence Score: ${feedback?.confidenceScore || 'N/A'}
+
+## Transcript Summary
+${transcript?.substring(0, 3000) || 'Not available'}
+
+Generate a JSON response with:
+1. "topics": Array of 3-6 study topics with id, topic, priority ("high"/"medium"/"low"), reason, resources (array), estimatedTime
+2. "weakAreas": Array of 2-4 weak areas with area, score (0-100), suggestion
+
+Respond ONLY with valid JSON.`;
+
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 2000,
+      messages: [{ role: 'user', content: prompt }]
+    });
+    
+    const content = response.content[0];
+    if (content.type !== 'text') return defaultResult;
+    
+    const jsonMatch = content.text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return defaultResult;
+    
+    const parsed = JSON.parse(jsonMatch[0]);
+    
+    const result = {
+      topics: (parsed.topics || []).map((t: any, i: number) => ({
+        id: t.id || `topic-${i}`,
+        topic: t.topic || 'Unknown Topic',
+        priority: ['high', 'medium', 'low'].includes(t.priority) ? t.priority : 'medium',
+        reason: t.reason || '',
+        resources: Array.isArray(t.resources) ? t.resources : [],
+        estimatedTime: t.estimatedTime
+      })),
+      weakAreas: (parsed.weakAreas || []).map((w: any) => ({
+        area: w.area || 'Unknown Area',
+        score: typeof w.score === 'number' ? w.score : 50,
+        suggestion: w.suggestion || ''
+      }))
+    };
+    
+    await prisma.studyRecommendation.upsert({
+      where: { interviewId },
+      create: { interviewId, topics: result.topics, weakAreas: result.weakAreas },
+      update: { topics: result.topics, weakAreas: result.weakAreas, generatedAt: new Date() }
+    });
+    
+    return result;
+  } catch (error) {
+    dbLogger.error('Failed to generate recommendations', { error });
+    return defaultResult;
+  }
+}
+
+export async function getStudyRecommendations(
+  interviewId: string
+): Promise<{ topics: StudyTopic[]; weakAreas: WeakArea[] } | null> {
+  const recommendation = await prisma.studyRecommendation.findUnique({
+    where: { interviewId }
+  });
+  
+  if (!recommendation) return null;
+  
+  return {
+    topics: recommendation.topics as StudyTopic[],
+    weakAreas: recommendation.weakAreas as WeakArea[]
+  };
+}
+

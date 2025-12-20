@@ -190,7 +190,7 @@ class MercadoPagoProvider implements IPaymentProvider {
       items: [
         {
           id: params.packageId,
-          title: `Voxly - ${params.packageName}`,
+          title: `Vocaid - ${params.packageName}`,
           description: `${params.credits} interview credits`,
           quantity: 1,
           unit_price: params.amountLocal,
@@ -206,7 +206,7 @@ class MercadoPagoProvider implements IPaymentProvider {
         credits: params.credits,
         provider: 'mercadopago',
       }),
-      statement_descriptor: 'Voxly',
+      statement_descriptor: 'Vocaid',
       metadata: {
         user_id: params.userId,
         package_id: params.packageId,
@@ -395,7 +395,7 @@ class PayPalProvider implements IPaymentProvider {
       purchase_units: [
         {
           reference_id: params.packageId,
-          description: `Voxly - ${params.packageName} (${params.credits} credits)`,
+          description: `Vocaid - ${params.packageName} (${params.credits} credits)`,
           custom_id: JSON.stringify({
             userId: params.userId,
             packageId: params.packageId,
@@ -409,7 +409,7 @@ class PayPalProvider implements IPaymentProvider {
         },
       ],
       application_context: {
-        brand_name: 'Voxly',
+        brand_name: 'Vocaid',
         landing_page: 'LOGIN',
         user_action: 'PAY_NOW',
         return_url: params.successUrl,

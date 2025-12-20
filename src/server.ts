@@ -309,7 +309,7 @@ const feedbackService = new FeedbackService(
 app.get('/health', (req: Request, res: Response) => {
   res.json({
     status: 'ok',
-    message: 'Voxly Backend is running',
+    message: 'Vocaid Backend is running',
     timestamp: new Date().toISOString()
   });
 });
@@ -1275,7 +1275,7 @@ logger.info('WebSocket endpoints initialized', {
 
 wsApp.listen(PORT, () => {
   logger.info('═'.repeat(60));
-  logger.info('🎙️  Voxly Backend Server Running');
+  logger.info('🎙️  Vocaid Backend Server Running');
   logger.info('═'.repeat(60));
   logger.info(`Port: ${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);

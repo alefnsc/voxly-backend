@@ -19,7 +19,7 @@ if (process.env.RESEND_API_KEY) {
 }
 
 // Email configuration
-const EMAIL_FROM = process.env.EMAIL_FROM || 'Voxly <onboarding@resend.dev>';
+const EMAIL_FROM = process.env.EMAIL_FROM || 'Vocaid <onboarding@resend.dev>';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://voxly-frontend-pearl.vercel.app';
 
 // ========================================
@@ -68,7 +68,7 @@ function generateFeedbackEmailHtml(params: {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Interview Feedback - Voxly</title>
+  <title>Interview Feedback - Vocaid</title>
 </head>
 <body style="margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f3f4f6;">
   <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f3f4f6;">
@@ -79,7 +79,7 @@ function generateFeedbackEmailHtml(params: {
           <!-- Header with gradient -->
           <tr>
             <td style="background: linear-gradient(135deg, #5417C9 0%, #7c3aed 100%); padding: 40px 30px; text-align: center;">
-              <img src="${FRONTEND_URL}/Main.png" alt="Voxly" width="60" height="60" style="margin-bottom: 16px; border-radius: 12px;">
+              <img src="${FRONTEND_URL}/Main.png" alt="Vocaid" width="60" height="60" style="margin-bottom: 16px; border-radius: 12px;">
               <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 700;">Interview Feedback Ready!</h1>
               <p style="color: #e9d5ff; margin: 8px 0 0 0; font-size: 16px;">Your AI-powered interview analysis is complete</p>
             </td>
@@ -137,10 +137,10 @@ function generateFeedbackEmailHtml(params: {
           <tr>
             <td style="background-color: #f9fafb; padding: 24px 30px; text-align: center; border-top: 1px solid #e5e7eb;">
               <p style="color: #9ca3af; font-size: 12px; margin: 0 0 8px 0;">
-                © 2025 Voxly - AI-Powered Interview Preparation
+                © 2025 Vocaid - AI-Powered Interview Preparation
               </p>
               <p style="color: #9ca3af; font-size: 12px; margin: 0;">
-                <a href="${FRONTEND_URL}" style="color: #5417C9; text-decoration: none;">Visit Voxly</a> • 
+                <a href="${FRONTEND_URL}" style="color: #5417C9; text-decoration: none;">Visit Vocaid</a> • 
                 <a href="${FRONTEND_URL}/about" style="color: #5417C9; text-decoration: none;">About</a>
               </p>
             </td>
@@ -277,7 +277,7 @@ export async function sendWelcomeEmail(
     const { data, error } = await resend.emails.send({
       from: EMAIL_FROM,
       to: [toEmail],
-      subject: 'Welcome to Voxly - Your AI Interview Coach!',
+      subject: 'Welcome to Vocaid - Your AI Interview Coach!',
       html: `
 <!DOCTYPE html>
 <html>
@@ -291,14 +291,14 @@ export async function sendWelcomeEmail(
         <table role="presentation" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 12px; overflow: hidden;">
           <tr>
             <td style="background: linear-gradient(135deg, #5417C9 0%, #7c3aed 100%); padding: 40px 30px; text-align: center;">
-              <h1 style="color: #ffffff; margin: 0;">Welcome to Voxly! 🎉</h1>
+              <h1 style="color: #ffffff; margin: 0;">Welcome to Vocaid! 🎉</h1>
             </td>
           </tr>
           <tr>
             <td style="padding: 40px 30px;">
               <p style="color: #374151; font-size: 16px;">Hi ${userName},</p>
               <p style="color: #374151; font-size: 16px; line-height: 1.6;">
-                Welcome to Voxly, your AI-powered interview preparation platform! 
+                Welcome to Vocaid, your AI-powered interview preparation platform! 
                 We've given you <strong>1 free credit</strong> to get started.
               </p>
               <p style="color: #374151; font-size: 16px; line-height: 1.6;">

@@ -139,7 +139,7 @@ export class MercadoPagoService {
         items: [
           {
             id: pkg.id,
-            title: `Voxly - ${pkg.name} Package`,
+            title: `Vocaid - ${pkg.name} Package`,
             description: `${pkg.description} - ${pkg.credits} interview credits`,
             quantity: 1,
             unit_price: pkg.priceBRL,  // Use BRL price for MercadoPago
@@ -154,7 +154,7 @@ export class MercadoPagoService {
           packageId: packageId,
           credits: pkg.credits
         }),
-        statement_descriptor: 'Voxly',
+        statement_descriptor: 'Vocaid',
         metadata: {
           user_id: userId,
           package_id: packageId,

@@ -69,7 +69,7 @@ const logLevel = process.env.LOG_LEVEL || 'info';
 const logger = winston.createLogger({
   level: logLevel,
   format: logFormat,
-  defaultMeta: { service: 'voxly-backend' },
+  defaultMeta: { service: 'vocaid-backend' },
   transports: [
     // Console output with colors - show info level for request visibility
     new winston.transports.Console({

@@ -59,7 +59,7 @@ function generateBaseSystemPrompt(
   
   return `
 <agent_identity>
-  <name>Voxly</name>
+  <name>Vocaid</name>
   <role>Professional AI Interview Coach</role>
   <purpose>Conduct realistic mock interviews to help candidates prepare for job interviews</purpose>
 </agent_identity>
@@ -149,7 +149,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
 } {
   const phrases: Record<SupportedLanguageCode, ReturnType<typeof getLanguageSpecificPhrases>> = {
     'en-US': {
-      greeting: "Hello {candidateName}! Welcome to your mock interview with Voxly. I'm your AI interviewer, and today I'll be evaluating your skills for the {jobTitle} position at {companyName}. This interview will take about 15 minutes. Let's begin!",
+      greeting: "Hello {candidateName}! Welcome to your mock interview with Vocaid. I'm your AI interviewer, and today I'll be evaluating your skills for the {jobTitle} position at {companyName}. This interview will take about 15 minutes. Let's begin!",
       reminders: {
         silence: "I'm still here. Take your time if you need a moment to think.",
         timeWarning: "We have about 5 minutes left in our interview.",
@@ -162,7 +162,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
       },
     },
     'en-GB': {
-      greeting: "Hello {candidateName}! Welcome to your mock interview with Voxly. I'm your AI interviewer, and today I'll be assessing your skills for the {jobTitle} role at {companyName}. This interview will take approximately 15 minutes. Shall we begin?",
+      greeting: "Hello {candidateName}! Welcome to your mock interview with Vocaid. I'm your AI interviewer, and today I'll be assessing your skills for the {jobTitle} role at {companyName}. This interview will take approximately 15 minutes. Shall we begin?",
       reminders: {
         silence: "I'm still here. Do take your time if you need a moment.",
         timeWarning: "We've got about 5 minutes remaining.",
@@ -175,7 +175,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
       },
     },
     'pt-BR': {
-      greeting: "Olá {candidateName}! Bem-vindo à sua entrevista simulada com a Voxly. Sou seu entrevistador de IA, e hoje vou avaliar suas habilidades para a posição de {jobTitle} na {companyName}. Esta entrevista durará cerca de 15 minutos. Vamos começar!",
+      greeting: "Olá {candidateName}! Bem-vindo à sua entrevista simulada com a Vocaid. Sou seu entrevistador de IA, e hoje vou avaliar suas habilidades para a posição de {jobTitle} na {companyName}. Esta entrevista durará cerca de 15 minutos. Vamos começar!",
       reminders: {
         silence: "Ainda estou aqui. Pode pensar com calma se precisar de um momento.",
         timeWarning: "Temos cerca de 5 minutos restantes na nossa entrevista.",
@@ -188,7 +188,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
       },
     },
     'es-ES': {
-      greeting: "¡Hola {candidateName}! Bienvenido a tu entrevista simulada con Voxly. Soy tu entrevistador de IA, y hoy evaluaré tus habilidades para el puesto de {jobTitle} en {companyName}. Esta entrevista durará unos 15 minutos. ¡Comencemos!",
+      greeting: "¡Hola {candidateName}! Bienvenido a tu entrevista simulada con Vocaid. Soy tu entrevistador de IA, y hoy evaluaré tus habilidades para el puesto de {jobTitle} en {companyName}. Esta entrevista durará unos 15 minutos. ¡Comencemos!",
       reminders: {
         silence: "Sigo aquí. Tómate tu tiempo si necesitas un momento para pensar.",
         timeWarning: "Nos quedan unos 5 minutos de entrevista.",
@@ -201,7 +201,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
       },
     },
     'es-MX': {
-      greeting: "¡Hola {candidateName}! Bienvenido a tu entrevista de práctica con Voxly. Soy tu entrevistador de IA, y hoy evaluaré tus habilidades para el puesto de {jobTitle} en {companyName}. Esta entrevista tomará unos 15 minutos. ¡Empecemos!",
+      greeting: "¡Hola {candidateName}! Bienvenido a tu entrevista de práctica con Vocaid. Soy tu entrevistador de IA, y hoy evaluaré tus habilidades para el puesto de {jobTitle} en {companyName}. Esta entrevista tomará unos 15 minutos. ¡Empecemos!",
       reminders: {
         silence: "Aquí sigo. Tómate tu tiempo si necesitas pensar un momento.",
         timeWarning: "Nos quedan como 5 minutos de entrevista.",
@@ -214,7 +214,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
       },
     },
     'es-AR': {
-      greeting: "¡Hola {candidateName}! Bienvenido a tu entrevista de práctica con Voxly. Soy tu entrevistador de IA, y hoy voy a evaluar tus habilidades para el puesto de {jobTitle} en {companyName}. Esta entrevista va a durar unos 15 minutos. ¡Arranquemos!",
+      greeting: "¡Hola {candidateName}! Bienvenido a tu entrevista de práctica con Vocaid. Soy tu entrevistador de IA, y hoy voy a evaluar tus habilidades para el puesto de {jobTitle} en {companyName}. Esta entrevista va a durar unos 15 minutos. ¡Arranquemos!",
       reminders: {
         silence: "Acá sigo. Tomate tu tiempo si necesitás pensar un momento.",
         timeWarning: "Nos quedan como 5 minutos de entrevista.",
@@ -227,7 +227,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
       },
     },
     'fr-FR': {
-      greeting: "Bonjour {candidateName} ! Bienvenue à votre entretien simulé avec Voxly. Je suis votre intervieweur IA, et aujourd'hui j'évaluerai vos compétences pour le poste de {jobTitle} chez {companyName}. Cet entretien durera environ 15 minutes. Commençons !",
+      greeting: "Bonjour {candidateName} ! Bienvenue à votre entretien simulé avec Vocaid. Je suis votre intervieweur IA, et aujourd'hui j'évaluerai vos compétences pour le poste de {jobTitle} chez {companyName}. Cet entretien durera environ 15 minutes. Commençons !",
       reminders: {
         silence: "Je suis toujours là. Prenez votre temps si vous avez besoin de réfléchir.",
         timeWarning: "Il nous reste environ 5 minutes d'entretien.",
@@ -240,7 +240,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
       },
     },
     'ru-RU': {
-      greeting: "Здравствуйте, {candidateName}! Добро пожаловать на пробное собеседование с Voxly. Я ваш ИИ-интервьюер, и сегодня я оценю ваши навыки для позиции {jobTitle} в компании {companyName}. Это собеседование продлится около 15 минут. Начнём!",
+      greeting: "Здравствуйте, {candidateName}! Добро пожаловать на пробное собеседование с Vocaid. Я ваш ИИ-интервьюер, и сегодня я оценю ваши навыки для позиции {jobTitle} в компании {companyName}. Это собеседование продлится около 15 минут. Начнём!",
       reminders: {
         silence: "Я всё ещё здесь. Не торопитесь, если вам нужно подумать.",
         timeWarning: "У нас осталось около 5 минут.",
@@ -253,7 +253,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
       },
     },
     'zh-CN': {
-      greeting: "您好 {candidateName}！欢迎参加 Voxly 模拟面试。我是您的 AI 面试官，今天我将评估您申请 {companyName} 公司 {jobTitle} 职位的技能。这次面试大约需要15分钟。让我们开始吧！",
+      greeting: "您好 {candidateName}！欢迎参加 Vocaid 模拟面试。我是您的 AI 面试官，今天我将评估您申请 {companyName} 公司 {jobTitle} 职位的技能。这次面试大约需要15分钟。让我们开始吧！",
       reminders: {
         silence: "我还在这里。如果需要思考一下，请不要着急。",
         timeWarning: "我们还剩大约5分钟的面试时间。",
@@ -267,7 +267,7 @@ export function getLanguageSpecificPhrases(language: SupportedLanguageCode): {
     },
     // Note: zh-TW (Cantonese/Traditional Chinese) is NOT supported
     'hi-IN': {
-      greeting: "नमस्ते {candidateName}! Voxly के साथ आपके मॉक इंटरव्यू में आपका स्वागत है। मैं आपका AI इंटरव्यूअर हूं, और आज मैं {companyName} में {jobTitle} पद के लिए आपके कौशल का मूल्यांकन करूंगा। यह इंटरव्यू लगभग 15 मिनट का होगा। चलिए शुरू करते हैं!",
+      greeting: "नमस्ते {candidateName}! Vocaid के साथ आपके मॉक इंटरव्यू में आपका स्वागत है। मैं आपका AI इंटरव्यूअर हूं, और आज मैं {companyName} में {jobTitle} पद के लिए आपके कौशल का मूल्यांकन करूंगा। यह इंटरव्यू लगभग 15 मिनट का होगा। चलिए शुरू करते हैं!",
       reminders: {
         silence: "मैं अभी भी यहां हूं। अगर आपको सोचने के लिए समय चाहिए तो आराम से लीजिए।",
         timeWarning: "हमारे इंटरव्यू में लगभग 5 मिनट बाकी हैं।",

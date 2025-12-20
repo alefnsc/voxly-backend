@@ -15,10 +15,13 @@ import { RetellService } from './services/retellService';
 import { MercadoPagoService, getMercadoPagoCredentials } from './services/mercadoPagoService';
 import { FeedbackService } from './services/feedbackService';
 import { CustomLLMWebSocketHandler } from './services/customLLMWebSocket';
+import { spendCredits, restoreCredits } from './services/creditsWalletService';
 
 // Routes
 import apiRoutes from './routes/apiRoutes';
 import analyticsRoutes from './routes/analyticsRoutes';
+import creditsRoutes from './routes/creditsRoutes';
+import leadsRoutes from './routes/leadsRoutes';
 
 // Logger
 import logger, { wsLogger, retellLogger, feedbackLogger, paymentLogger, authLogger, httpLogger } from './utils/logger';
@@ -259,6 +262,12 @@ app.use('/api', apiRoutes);
 
 // Mount analytics, performance chat, and abuse detection routes
 app.use('/api', analyticsRoutes);
+
+// Mount credits wallet routes
+app.use('/api/credits', creditsRoutes);
+
+// Mount leads routes (public - no auth required)
+app.use('/api/leads', leadsRoutes);
 
 // ===== AUTHENTICATION MIDDLEWARE =====
 
@@ -1098,6 +1107,23 @@ app.post('/consume-credit',
     // Update credits in PostgreSQL (source of truth)
     const updatedUser = await clerkService.updateUserCredits(userId, 1, 'subtract');
 
+    // Record in wallet ledger (non-blocking)
+    try {
+      await spendCredits(
+        userId,
+        1,
+        'Interview credit consumed',
+        callId ? 'interview' : undefined,
+        callId,
+        callId ? `interview_${callId}` : undefined
+      );
+    } catch (walletError: any) {
+      authLogger.warn('Failed to record credit spend in wallet (non-critical)', { 
+        userId, 
+        error: walletError.message 
+      });
+    }
+
     authLogger.info('Credit consumed', { userId, previousCredits: currentCredits, newCredits: updatedUser.credits });
 
     res.json({
@@ -1175,6 +1201,22 @@ app.post('/restore-credit',
 
     // Update credits in PostgreSQL (source of truth)
     const updatedUser = await clerkService.updateUserCredits(userId, 1, 'add');
+
+    // Record in wallet ledger (non-blocking)
+    try {
+      await restoreCredits(
+        userId,
+        1,
+        reason || 'Credit restored due to interview cancellation',
+        callId ? 'interview' : undefined,
+        callId
+      );
+    } catch (walletError: any) {
+      authLogger.warn('Failed to record credit restore in wallet (non-critical)', { 
+        userId, 
+        error: walletError.message 
+      });
+    }
 
     authLogger.info('Credit restored', { userId, previousCredits: currentCredits, newCredits: updatedUser.credits });
 

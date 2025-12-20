@@ -8,6 +8,13 @@ import { Webhook } from 'svix';
 import { prisma, dbLogger } from './databaseService';
 import { authLogger } from '../utils/logger';
 import { checkSignupAbuse, recordSignup, SignupInfo } from './signupAbuseService';
+import { addCredits as walletAddCredits, initializeWalletWithBonus } from './creditsWalletService';
+
+// ========================================
+// CONFIGURATION
+// ========================================
+
+const FREE_TRIAL_CREDITS = parseInt(process.env.FREE_TRIAL_CREDITS || '1', 10);
 
 // ========================================
 // TYPES
@@ -399,7 +406,7 @@ export async function handleUserCreated(userData: ClerkUserData, signupInfo?: Si
         await clerkClient.users.updateUser(userData.id, {
           publicMetadata: {
             ...userData.public_metadata,
-            credits: 1,
+            credits: FREE_TRIAL_CREDITS,
             freeTrialUsed: true,
             registrationDate: new Date().toISOString()
           }
@@ -408,10 +415,18 @@ export async function handleUserCreated(userData: ClerkUserData, signupInfo?: Si
         // Update local database
         await prisma.user.update({
           where: { clerkId: userData.id },
-          data: { credits: 1 }
+          data: { credits: FREE_TRIAL_CREDITS }
         });
 
-        authLogger.info('Free trial credit granted', { userId: userData.id });
+        // Initialize wallet with signup bonus (non-blocking)
+        try {
+          await initializeWalletWithBonus(user.id, FREE_TRIAL_CREDITS);
+          authLogger.info('Wallet initialized with signup bonus', { userId: userData.id, credits: FREE_TRIAL_CREDITS });
+        } catch (walletError: any) {
+          authLogger.warn('Failed to initialize wallet (non-critical)', { userId: userData.id, error: walletError.message });
+        }
+
+        authLogger.info('Free trial credit granted', { userId: userData.id, credits: FREE_TRIAL_CREDITS });
       } else {
         // Mark freeTrialUsed but don't grant credits
         await clerkClient.users.updateUser(userData.id, {
@@ -679,19 +694,27 @@ export async function validateAndSyncUser(clerkId: string, signupInfo?: SignupIn
           // Grant free trial credit
           await prisma.user.update({
             where: { clerkId },
-            data: { credits: 1 }
+            data: { credits: FREE_TRIAL_CREDITS }
           });
           
           await clerkClient.users.updateUser(clerkId, {
             publicMetadata: {
               ...clerkUser.publicMetadata,
-              credits: 1,
+              credits: FREE_TRIAL_CREDITS,
               freeTrialUsed: true,
               registrationDate: new Date().toISOString()
             }
           });
+
+          // Initialize wallet with signup bonus (non-blocking)
+          try {
+            await initializeWalletWithBonus(user.id, FREE_TRIAL_CREDITS);
+            authLogger.info('Wallet initialized with signup bonus during validation', { clerkId, credits: FREE_TRIAL_CREDITS });
+          } catch (walletError: any) {
+            authLogger.warn('Failed to initialize wallet during validation (non-critical)', { clerkId, error: walletError.message });
+          }
           
-          authLogger.info('Free trial credit granted during validation', { clerkId });
+          authLogger.info('Free trial credit granted during validation', { clerkId, credits: FREE_TRIAL_CREDITS });
           
           // Return updated user
           const updatedUser = await prisma.user.findUnique({ where: { clerkId } });

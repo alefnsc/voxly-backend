@@ -43,6 +43,8 @@ model User {
   chatSessions    ChatSession[]
   savedCards      SavedCard[]
   resumeDocuments ResumeDocument[]
+  creditsWallet   CreditsWallet?
+  creditLedger    CreditLedger[]
 
   @@index([clerkId])
   @@index([email])
@@ -50,6 +52,77 @@ model User {
   @@index([preferredLanguage])
   @@index([registrationRegion])
   @@map("users")
+}
+
+// ========================================
+// CREDITS WALLET MODEL
+// Single source of truth for user's credit balance
+// ========================================
+model CreditsWallet {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @unique @map("user_id") @db.Uuid
+  
+  // Current balance (always >= 0)
+  balance         Int       @default(0)
+  
+  // Lifetime stats for analytics
+  totalEarned     Int       @default(0) @map("total_earned")
+  totalSpent      Int       @default(0) @map("total_spent")
+  totalPurchased  Int       @default(0) @map("total_purchased")
+  totalGranted    Int       @default(0) @map("total_granted") // Free credits, promos, etc.
+  
+  // Last activity tracking
+  lastCreditAt    DateTime? @map("last_credit_at")  // Last time credits were added
+  lastDebitAt     DateTime? @map("last_debit_at")   // Last time credits were spent
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+  
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([balance])
+  @@map("credits_wallets")
+}
+
+// ========================================
+// CREDIT LEDGER MODEL
+// Immutable audit trail for all credit transactions
+// ========================================
+model CreditLedger {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  
+  // Transaction details
+  type            CreditTransactionType
+  amount          Int       // Always positive, type determines direction
+  balanceAfter    Int       @map("balance_after") // Balance after this transaction
+  
+  // Reference to related entity (payment, interview, etc.)
+  referenceType   String?   @map("reference_type") @db.VarChar(50) // 'payment', 'interview', 'promo', 'refund', 'admin'
+  referenceId     String?   @map("reference_id") @db.Uuid
+  
+  // Human-readable description
+  description     String    @db.VarChar(255)
+  
+  // Additional metadata (promo codes, admin notes, etc.)
+  metadata        Json?     @db.JsonB
+  
+  // Idempotency key to prevent duplicate transactions
+  idempotencyKey  String?   @unique @map("idempotency_key") @db.VarChar(255)
+  
+  // Timestamps (immutable - no updatedAt)
+  createdAt       DateTime  @default(now()) @map("created_at")
+  
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId, createdAt])
+  @@index([type])
+  @@index([referenceType, referenceId])
+  @@index([createdAt])
+  @@map("credit_ledger")
 }
 
 // ========================================
@@ -602,4 +675,73 @@ enum PaymentStatus {
   CANCELLED   // Payment cancelled
   REFUNDED    // Payment refunded
   IN_PROCESS  // Payment being processed
+}
+
+enum CreditTransactionType {
+  PURCHASE    // Credits purchased via payment
+  GRANT       // Free credits (signup bonus, promo)
+  SPEND       // Credits spent on interview
+  REFUND      // Credits refunded (payment refund)
+  RESTORE     // Credits restored (early quit)
+  ADMIN       // Manual adjustment by admin
+  PROMO       // Promotional credits
+  REFERRAL    // Referral bonus credits
+  EXPIRE      // Credits expired (if implementing expiry)
+}
+
+enum LeadType {
+  DEMO_REQUEST     // B2B demo request
+  EARLY_ACCESS     // Early access signup for B2B modules
+}
+
+enum LeadSource {
+  LANDING_PAGE     // From main landing page
+  PLATFORM_SHOWCASE // From platform showcase section
+  PRICING_PAGE     // From pricing page
+  OTHER            // Other sources
+}
+
+// ========================================
+// LEAD MODEL
+// Captures demo requests and early access signups
+// ========================================
+model Lead {
+  id              String      @id @default(uuid()) @db.Uuid
+  
+  // Contact Information
+  name            String
+  email           String
+  company         String?
+  phone           String?
+  
+  // Lead Classification
+  type            LeadType    @default(EARLY_ACCESS)
+  source          LeadSource  @default(LANDING_PAGE)
+  
+  // B2B Specific Fields
+  teamSize        String?     @map("team_size")
+  useCase         String?     @map("use_case")
+  
+  // Module Interest (for early access)
+  interestedModules String[]  @default([]) @map("interested_modules") // ['recruiter_platform', 'employee_hub']
+  
+  // Lead Status
+  contacted       Boolean     @default(false)
+  contactedAt     DateTime?   @map("contacted_at")
+  notes           String?     @db.Text
+  
+  // Tracking
+  ipAddress       String?     @map("ip_address") @db.VarChar(45)
+  userAgent       String?     @map("user_agent")
+  referrer        String?
+  
+  // Timestamps
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  @@index([email])
+  @@index([type])
+  @@index([contacted])
+  @@index([createdAt])
+  @@map("leads")
 }

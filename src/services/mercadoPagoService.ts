@@ -2,6 +2,7 @@ import { MercadoPagoConfig, Preference, Payment } from 'mercadopago';
 import { clerkClient } from '@clerk/express';
 import { paymentLogger } from '../utils/logger';
 import { updateUserCredits } from './clerkService';
+import { addPurchasedCredits } from './creditsWalletService';
 
 // Import payment service for database operations (lazy to avoid circular deps)
 let paymentDbService: typeof import('./paymentService') | null = null;
@@ -321,7 +322,7 @@ export class MercadoPagoService {
             }
 
             // Add credits to user - this is the critical operation
-            await this.addCreditsToUser(userId, credits);
+            await this.addCreditsToUser(userId, credits, String(paymentId));
 
             return {
               success: true,
@@ -366,13 +367,32 @@ export class MercadoPagoService {
   /**
    * Add credits to user via PostgreSQL database
    * Uses clerkService which updates both PostgreSQL (source of truth) and Clerk metadata
+   * Also records the transaction in the credits wallet ledger for audit
    */
-  private async addCreditsToUser(userId: string, creditsToAdd: number) {
+  private async addCreditsToUser(userId: string, creditsToAdd: number, paymentId?: string) {
     try {
       console.log(`Adding ${creditsToAdd} credits to user ${userId}`);
 
       // Use updateUserCredits to update credits in PostgreSQL (source of truth)
       const updatedUser = await updateUserCredits(userId, creditsToAdd, 'add');
+
+      // Also record in the wallet ledger for complete audit trail
+      try {
+        await addPurchasedCredits(
+          userId,
+          creditsToAdd,
+          paymentId || 'unknown',
+          `MercadoPago payment`
+        );
+        paymentLogger.info('Credits recorded in wallet ledger', { userId, credits: creditsToAdd, paymentId });
+      } catch (walletError: any) {
+        // Non-blocking - main credits update already succeeded
+        paymentLogger.warn('Failed to record in wallet ledger (non-critical)', { 
+          error: walletError.message,
+          userId,
+          credits: creditsToAdd
+        });
+      }
 
       console.log(`Credits updated for user ${userId}: new balance = ${updatedUser.credits}`);
 

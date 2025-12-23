@@ -41,6 +41,7 @@ model User {
   // Relations
   interviews      Interview[]
   payments        Payment[]
+  paymentProviderConnections PaymentProviderConnection[]
   signupRecord    SignupRecord?
   scoreHistory    InterviewScoreHistory[]
   usageLogs       UsageLog[]
@@ -353,6 +354,8 @@ model Interview {
   scoreHistory    InterviewScoreHistory[]
   transcriptSegments TranscriptSegment[]
   emailLogs       EmailLog[]
+  feedbackJsons   FeedbackJson[]
+  feedbackPdfs    FeedbackPdf[]
 
   @@index([userId])
   @@index([retellCallId])
@@ -365,6 +368,78 @@ model Interview {
   @@index([resumeId])
   @@index([emailSendStatus])
   @@map("interviews")
+}
+
+// ========================================
+// FEEDBACK JSON MODEL
+// Stores versioned structured feedback from LLM
+// ========================================
+model FeedbackJson {
+  id              String    @id @default(uuid()) @db.Uuid
+  interviewId     String    @map("interview_id") @db.Uuid
+  
+  // Versioning
+  schemaVersion   String    @map("schema_version") @db.VarChar(20)  // e.g., "1.0"
+  promptVersion   String    @map("prompt_version") @db.VarChar(50)  // e.g., "v1.0.0"
+  model           String    @db.VarChar(100)                        // e.g., "gpt-4-turbo-preview"
+  
+  // Content
+  contentJson     Json      @map("content_json") @db.JsonB          // Full structured feedback
+  overallScore    Float     @map("overall_score") @db.DoublePrecision
+  
+  // Metadata
+  generationTimeMs Int?     @map("generation_time_ms")
+  tokenCount      Int?      @map("token_count")
+  warningCount    Int?      @map("warning_count") @default(0)
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  
+  // Relations
+  interview       Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  pdfs            FeedbackPdf[]
+  
+  @@index([interviewId])
+  @@index([schemaVersion])
+  @@index([createdAt])
+  @@map("feedback_jsons")
+}
+
+// ========================================
+// FEEDBACK PDF MODEL
+// Stores generated PDF metadata and references
+// ========================================
+model FeedbackPdf {
+  id              String    @id @default(uuid()) @db.Uuid
+  interviewId     String    @map("interview_id") @db.Uuid
+  feedbackJsonId  String    @map("feedback_json_id") @db.Uuid
+  
+  // PDF Metadata
+  pageCount       Int       @map("page_count")
+  fileSizeBytes   Int       @map("file_size_bytes")
+  checksum        String    @db.VarChar(64)                         // SHA-256 hash for integrity
+  
+  // Storage
+  storageKey      String?   @map("storage_key") @db.VarChar(500)    // S3 key or storage reference
+  pdfBase64       String?   @map("pdf_base64") @db.Text             // Inline storage (temporary)
+  
+  // Generation
+  locale          String?   @db.VarChar(10)
+  includesStudyPlan Boolean @default(true) @map("includes_study_plan")
+  includesHighlights Boolean @default(true) @map("includes_highlights")
+  
+  // Timestamps
+  createdAt       DateTime  @default(now()) @map("created_at")
+  
+  // Relations
+  interview       Interview @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  feedbackJson    FeedbackJson @relation(fields: [feedbackJsonId], references: [id], onDelete: Cascade)
+  
+  @@index([interviewId])
+  @@index([feedbackJsonId])
+  @@index([checksum])
+  @@index([createdAt])
+  @@map("feedback_pdfs")
 }
 
 // ========================================
@@ -529,6 +604,46 @@ model Payment {
   @@index([status])
   @@index([createdAt])
   @@map("payments")
+}
+
+// ========================================
+// PAYMENT PROVIDER CONNECTION MODEL
+// Stores OAuth tokens for "Log in with PayPal" and similar flows
+// Enables seamless one-click checkout for returning customers
+// ========================================
+model PaymentProviderConnection {
+  id                  String          @id @default(uuid()) @db.Uuid
+  userId              String          @map("user_id") @db.Uuid
+  
+  // Provider identification
+  provider            PaymentProvider
+  providerAccountId   String?         @map("provider_account_id") @db.VarChar(255)
+  providerEmail       String?         @map("provider_email") @db.VarChar(255)
+  
+  // OAuth tokens (encrypted in production)
+  accessToken         String?         @map("access_token") @db.Text
+  refreshToken        String?         @map("refresh_token") @db.Text
+  tokenExpiresAt      DateTime?       @map("token_expires_at")
+  
+  // Scope/permissions granted
+  scopes              String[]        @db.VarChar(100)
+  
+  // Connection status
+  isActive            Boolean         @default(true) @map("is_active")
+  lastUsedAt          DateTime?       @map("last_used_at")
+  
+  // Metadata
+  connectedAt         DateTime        @default(now()) @map("connected_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+  
+  // Relations
+  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+  @@index([userId])
+  @@index([provider])
+  @@index([isActive])
+  @@map("payment_provider_connections")
 }
 
 // ========================================
@@ -737,6 +852,7 @@ enum CreditTransactionType {
 
 enum EmailSendStatus {
   PENDING     // Email not yet sent
+  SENDING     // Email currently being sent (in progress)
   SENT        // Email sent successfully
   FAILED      // Email failed to send
   SKIPPED     // Email skipped (user opted out)

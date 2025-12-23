@@ -270,6 +270,10 @@ app.use('/api/credits', creditsRoutes);
 // Mount leads routes (public - no auth required)
 app.use('/api/leads', leadsRoutes);
 
+// Mount email routes (with increased body size limit for PDF attachments)
+import emailRoutes from './routes/emailRoutes';
+app.use('/api/email', emailRoutes);
+
 // ===== AUTHENTICATION MIDDLEWARE =====
 
 // Verify user ID from header matches Clerk format and is present
@@ -1252,6 +1256,69 @@ app.post('/restore-credit',
       message: error.message
     });
   }
+});
+
+// ========================================
+// GLOBAL ERROR HANDLERS (JSON-ONLY)
+// ========================================
+
+/**
+ * API 404 Handler - Catch all unmatched /api/* routes
+ * Returns JSON instead of HTML for missing API routes
+ */
+app.use('/api/*', (req: Request, res: Response) => {
+  const requestId = (req as any).requestId || crypto.randomUUID().slice(0, 8);
+  
+  httpLogger.warn('API route not found', { 
+    requestId, 
+    method: req.method, 
+    path: req.path,
+    originalUrl: req.originalUrl 
+  });
+  
+  res.status(404).json({
+    ok: false,
+    status: 'error',
+    error: {
+      code: 'NOT_FOUND',
+      message: `API endpoint not found: ${req.method} ${req.path}`,
+      requestId
+    }
+  });
+});
+
+/**
+ * Global Error Handler - Ensures all errors return JSON
+ * Catches any unhandled errors and returns proper JSON response
+ */
+app.use((err: Error & { status?: number; statusCode?: number }, req: Request, res: Response, next: NextFunction) => {
+  const requestId = (req as any).requestId || crypto.randomUUID().slice(0, 8);
+  const statusCode = err.status || err.statusCode || 500;
+  
+  // Log the error
+  logger.error('Unhandled error caught by global handler', {
+    requestId,
+    path: req.path,
+    method: req.method,
+    error: err.message,
+    stack: process.env.NODE_ENV !== 'production' ? err.stack : undefined
+  });
+  
+  // Determine safe message (don't expose internal errors in production)
+  const safeMessage = process.env.NODE_ENV === 'production' && statusCode === 500
+    ? 'An internal server error occurred'
+    : err.message || 'An unexpected error occurred';
+  
+  // Always return JSON
+  res.status(statusCode).json({
+    ok: false,
+    status: 'error',
+    error: {
+      code: statusCode === 500 ? 'SERVER_ERROR' : 'REQUEST_ERROR',
+      message: safeMessage,
+      requestId
+    }
+  });
 });
 
 // ===== APPLY EXPRESS-WS TO APP =====

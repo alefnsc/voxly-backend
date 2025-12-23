@@ -33,6 +33,23 @@ import {
 const router = Router();
 
 // ========================================
+// HEALTH CHECK
+// ========================================
+
+/**
+ * GET /api/health - API health check
+ * Returns JSON to confirm API is working
+ */
+router.get('/health', (_req: Request, res: Response) => {
+  res.json({
+    ok: true,
+    status: 'healthy',
+    timestamp: new Date().toISOString(),
+    service: 'vocaid-api'
+  });
+});
+
+// ========================================
 // MIDDLEWARE
 // ========================================
 
@@ -131,6 +148,49 @@ router.get('/users/me', requireAuth, async (req: Request, res: Response) => {
     res.status(500).json({
       status: 'error',
       message: 'Failed to fetch user profile'
+    });
+  }
+});
+
+/**
+ * POST /api/users/sync - Sync user from Clerk to database
+ * Called by frontend on login to ensure user exists in database
+ */
+router.post('/users/sync', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const clerkId = (req as any).clerkUserId;
+    const requestId = (req as any).requestId || 'N/A';
+    
+    apiLogger.info('User sync requested', { requestId, clerkId: clerkId.slice(0, 15) });
+    
+    // Find or create user (syncs with Clerk)
+    const user = await userService.findOrCreateUser(clerkId);
+    
+    apiLogger.info('User synced successfully', { 
+      requestId, 
+      clerkId: clerkId.slice(0, 15),
+      dbUserId: user.id 
+    });
+    
+    res.json({
+      status: 'success',
+      message: 'User synced successfully',
+      user: {
+        id: user.id,
+        clerkId: user.clerkId,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        imageUrl: user.imageUrl,
+        credits: user.credits,
+        createdAt: user.createdAt
+      }
+    });
+  } catch (error: any) {
+    dbLogger.error('Error syncing user', { error: error.message });
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to sync user'
     });
   }
 });
